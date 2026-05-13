@@ -1,0 +1,19 @@
+{
+  "name": "surge-crank",
+  "version": "0.2.0",
+  "description": "Automated draw orchestration for Surge Protocol",
+  "main": "crank.ts",
+  "scripts": {
+    "start": "ts-node crank.ts",
+    "dev": "nodemon --exec ts-node crank.ts"
+  },
+  "dependencies": {
+    "@mysten/sui": "^1.0.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "@types/node": "^20.12.7",
+    "nodemon": "^3.1.0"
+  }
+}
