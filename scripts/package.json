@@ -8,12 +8,13 @@
     "dev": "nodemon --exec ts-node crank.ts"
   },
   "dependencies": {
-    "@mysten/sui": "^1.0.0"
+    "@mysten/sui": "^1.0.0",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
-    "ts-node": "^10.9.2",
-    "typescript": "^5.4.5",
     "@types/node": "^20.12.7",
-    "nodemon": "^3.1.0"
+    "nodemon": "^3.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
   }
 }
