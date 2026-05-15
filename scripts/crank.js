@@ -23,7 +23,7 @@ const MIN_YIELD_MIST = 1_000_000n;
 function loadKeypair() {
   const keystorePath = `${os.homedir()}/.sui/sui_config/sui.keystore`;
   const keystore = JSON.parse(fs.readFileSync(keystorePath, 'utf-8'));
-  const raw = fromB64(keystore[0]);
+  const raw = fromB64(keystore[1]);
   const secret = raw.length === 33 ? raw.slice(1) : raw;
   return Ed25519Keypair.fromSecretKey(secret);
 }
