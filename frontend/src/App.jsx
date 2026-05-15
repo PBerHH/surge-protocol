@@ -3,10 +3,11 @@ import { ConnectButton, useCurrentAccount, useSuiClient, useSignAndExecuteTransa
 import { Transaction } from "@mysten/sui/transactions";
 
 // ── Contract Config ─────────────────────────────────────────────────────────
-const PACKAGE    = "0xbdbdf4652dd6392eeec906f59a5727dfeebe794596f1e4e12a1803960fff27e0";
-const VAULT      = "0x732b878f13565e3ead984d3961867be68cbea70b2fa23b9e10b4ce9a578453cd";
-const DRAW_STATE = "0xba7f844ee723e41aa3f7d3c74692093af73a357ee1c55f74d1034ba361aa37b9";
-const REWARD_POOL = "0xc88135fb61714723a08b97c9076f6778bc74fdbb3604cd8585be66f06b4ca1cf";
+const PACKAGE    = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
+const VAULT      = "0x4d859f119d1d55dca5858d07a1ef59f743baff05fc67aae0a03debef8d207f9a";
+const DRAW_STATE = "0x57c94b7c05cb0499575fd06ed4e31c1ec026a01a0fe87973e608f675a672ee8a";
+const REWARD_POOL = "0xb92ec4274ad888e5394f38fa12e8fcf780acab7ff4429a4a628f66b82f8e8115";
+const SUI_SYSTEM_STATE = "0x5";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(mist, dec = 3) {
@@ -87,14 +88,20 @@ export default function App() {
   async function handleStake() {
     if (!account) return;
     const amt = Math.floor(parseFloat(stakeAmount) * 1e9);
-    if (amt < 10e9) { setTxStatus({ type: "error", msg: "Minimum 10 SUI" }); return; }
+    if (amt < 1e9) { setTxStatus({ type: "error", msg: "Minimum 1 SUI" }); return; }
     setTxStatus({ type: "pending", msg: "Confirm in wallet..." });
     try {
       const tx = new Transaction();
+      tx.setGasPrice(1000);
       const [coin] = tx.splitCoins(tx.gas, [amt]);
       tx.moveCall({
         target: `${PACKAGE}::stake_vault::deposit`,
-        arguments: [tx.object(VAULT), coin, tx.object("0x6")],
+        arguments: [
+          tx.object(VAULT),
+          tx.sharedObjectRef({ objectId: "0x0000000000000000000000000000000000000000000000000000000000000005", initialSharedVersion: 1, mutable: true }),
+          coin,
+          tx.object("0x6"),
+        ],
       });
       signAndExecute({ transaction: tx }, {
         onSuccess: (r) => {
@@ -109,6 +116,7 @@ export default function App() {
   async function handleUnstake(receiptId) {
     setTxStatus({ type: "pending", msg: "Requesting unstake..." });
     const tx = new Transaction();
+    tx.setGasPrice(1000);
     tx.moveCall({
       target: `${PACKAGE}::stake_vault::request_unstake`,
       arguments: [tx.object(receiptId), tx.object("0x6")],
@@ -233,7 +241,7 @@ export default function App() {
                 value={stakeAmount}
                 onChange={e => { setStakeAmount(e.target.value); setTxStatus(null); }}
                 placeholder="100"
-                min="10"
+                min="1"
               />
               <span className="input-denom">SUI</span>
             </div>
@@ -281,7 +289,7 @@ export default function App() {
             <p className="loyalty-note">Streak bonus up to +0.3x · Resets on full withdrawal</p>
 
             <div className="info-rows">
-              <div className="info-row"><span>Min. deposit</span><span>10 SUI</span></div>
+              <div className="info-row"><span>Min. deposit</span><span>1 SUI (10 SUI for Spark draws)</span></div>
               <div className="info-row"><span>Unstake delay</span><span>1 epoch</span></div>
               <div className="info-row"><span>Protocol fee</span><span>2% of yield</span></div>
               <div className="info-row"><span>Randomness</span><span>Pyth Entropy</span></div>
@@ -308,7 +316,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <span>Surge Protocol · Sui Testnet · V2 · Built for Sui Overflow 2026</span>
+        <span>Surge Protocol · Sui Mainnet · V2 · Built for Sui Overflow 2026</span>
         <a href="https://github.com/PBerHH/surge-protocol" target="_blank" rel="noreferrer">GitHub ↗</a>
       </footer>
     </div>

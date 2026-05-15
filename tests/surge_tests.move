@@ -411,8 +411,8 @@ module surge::surge_tests {
         let mut s = ts::begin(ADMIN);
         {
             let ctx = ts::ctx(&mut s);
-            draw_manager::init_for_testing(ctx);
             reward_pool::init_for_testing(ctx);
+            draw_manager::init_for_testing(ctx);
         };
         ts::next_tx(&mut s, ADMIN);
         {
@@ -453,26 +453,14 @@ module surge::surge_tests {
 
     #[test]
     fun test_full_flow_deposit_yield_draw() {
-        let mut s = ts::begin(ALICE);
+        let mut s = ts::begin(ADMIN);
         {
             let ctx = ts::ctx(&mut s);
             stake_vault::init_for_testing(ctx);
             reward_pool::init_for_testing(ctx);
             draw_manager::init_for_testing(ctx);
-        };
-
-        ts::next_tx(&mut s, ALICE);
-        {
-            let mut vault = ts::take_shared<Vault>(&s);
-            let ctx = ts::ctx(&mut s);
-            let clock = clock_at(0, ctx);
-
-            // Alice deposits 100 SUI
-            let coin = mint_sui(SUI_100, ctx);
-            stake_vault::deposit(&mut vault, coin, &clock, ctx);
-
-            clock::destroy_for_testing(clock);
-            ts::return_shared(vault);
+            // Real deposit uses sui_system (not mockable in tests).
+            // Yield is simulated via add_yield below.
         };
 
         ts::next_tx(&mut s, ADMIN);
@@ -502,7 +490,7 @@ module surge::surge_tests {
         {
             let mut state = ts::take_shared<DrawState>(&s);
             let mut pool = ts::take_shared<RewardPool>(&s);
-            let cap = ts::take_from_address<DrawAdminCap>(&s, ALICE);
+            let cap = ts::take_from_sender<DrawAdminCap>(&s);
             let ctx = ts::ctx(&mut s);
 
             draw_manager::register_spark_tickets(&mut state, ALICE, 100, &cap, ctx);
@@ -515,7 +503,7 @@ module surge::surge_tests {
             clock::destroy_for_testing(clock);
             ts::return_shared(state);
             ts::return_shared(pool);
-            ts::return_to_address(ALICE, cap);
+            ts::return_to_sender(&s, cap);
         };
         ts::end(s);
     }

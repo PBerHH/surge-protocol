@@ -4,6 +4,9 @@ version = "0.2.0"
 edition = "2024.beta"
 
 [dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
+SuiSystem = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-system", rev = "framework/mainnet" }
 
 [addresses]
 surge = "0x0"
+sui_system = "0x3"
