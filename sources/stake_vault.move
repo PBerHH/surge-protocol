@@ -191,4 +191,10 @@ module surge::stake_vault {
     public fun receipt_owner(receipt: &StakeReceipt): address {
         receipt.owner
     }
+
+    // ── Test Helpers ───────────────────────────────────────────────────────────
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
 }

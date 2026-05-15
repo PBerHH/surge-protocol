@@ -279,4 +279,10 @@ module surge::draw_manager {
     public fun spark_ticket_count(state: &DrawState): u64 { vector::length(&state.spark_tickets) }
     public fun pulse_ticket_count(state: &DrawState): u64 { vector::length(&state.pulse_tickets) }
     public fun surge_ticket_count(state: &DrawState): u64 { vector::length(&state.surge_tickets) }
+
+    // ── Test Helpers ───────────────────────────────────────────────────────────
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
 }

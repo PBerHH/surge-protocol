@@ -170,4 +170,10 @@ module surge::reward_pool {
     public fun pulse_balance(pool: &RewardPool): u64  { balance::value(&pool.pulse_pool) }
     public fun surge_balance(pool: &RewardPool): u64  { balance::value(&pool.surge_pool) }
     public fun treasury_balance(pool: &RewardPool): u64 { balance::value(&pool.treasury) }
+
+    // ── Test Helpers ───────────────────────────────────────────────────────────
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
 }
