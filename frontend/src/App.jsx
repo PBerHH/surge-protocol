@@ -3,10 +3,10 @@ import { ConnectButton, useCurrentAccount, useSuiClient, useSignAndExecuteTransa
 import { Transaction } from "@mysten/sui/transactions";
 
 // ── Contract Config ─────────────────────────────────────────────────────────
-const PACKAGE    = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
-const VAULT      = "0x4d859f119d1d55dca5858d07a1ef59f743baff05fc67aae0a03debef8d207f9a";
-const DRAW_STATE = "0x57c94b7c05cb0499575fd06ed4e31c1ec026a01a0fe87973e608f675a672ee8a";
-const REWARD_POOL = "0xb92ec4274ad888e5394f38fa12e8fcf780acab7ff4429a4a628f66b82f8e8115";
+const PACKAGE    = "0xee5d7db7afba3e2d654281d541b992ece2a97353a54bd9c56fdb3295d78290ae";
+const VAULT      = "0x2a5a2b601e6b14a90270a1ced9623d2e6dd07255e99db47d2946e65062315540";
+const DRAW_STATE = "0xdee954695175139ce7614608fecb953a9839648243acd9e27e6d671d873ee1c2";
+const REWARD_POOL = "0x01c9f11ad7fdca399b97a806beed69c219aff5b4c58c902897ace9b117bb8307";
 const SUI_SYSTEM_STATE = "0x5";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -42,10 +42,10 @@ async function fetchVault(client) {
   const obj = await client.getObject({ id: VAULT, options: { showContent: true } });
   if (obj.data?.content?.dataType !== 'moveObject') return null;
   const f = obj.data.content.fields;
-  return {
-    totalStaked:  BigInt(f.total_staked ?? 0),
-    pendingYield: BigInt(f.pending_yield?.fields?.value ?? f.pending_yield ?? 0),
-  };
+  // total_staked is tracked as u64 in the vault
+  const totalStaked = BigInt(f.total_staked ?? 0);
+  const pendingYield = BigInt(f.pending_yield ?? 0);
+  return { totalStaked, pendingYield };
 }
 
 async function fetchDrawState(client) {
@@ -80,6 +80,7 @@ async function fetchStakers(client) {
       query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Deposited` },
       limit: 50,
     });
+    console.log(`  📋 Found ${events.data.length} deposit events`);
     const stakers = {};
     for (const ev of events.data) {
       const fields = ev.parsedJson;
@@ -87,6 +88,7 @@ async function fetchStakers(client) {
         const addr = fields.staker;
         const amt = BigInt(fields.amount_mist);
         stakers[addr] = (stakers[addr] ?? 0n) + amt;
+        console.log(`  👤 Staker: ${addr.slice(0,10)}... ${(Number(amt)/1e9).toFixed(2)} SUI`);
       }
     }
     return stakers;
@@ -219,6 +221,8 @@ async function tick(client, keypair) {
     if (now >= c.next) {
       if (c.bal && c.bal > 0n) {
         await registerAndDraw(client, keypair, c.type, stakers, c.bal);
+        // Wait 3s between draws so object versions settle
+        await new Promise(r => setTimeout(r, 3000));
       } else {
         console.log(`  ${c.icon} ${c.name}: due but pool empty — skipping`);
       }
