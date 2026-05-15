@@ -9,7 +9,11 @@ const DRAW_STATE = "0xdee954695175139ce7614608fecb953a9839648243acd9e27e6d671d87
 const REWARD_POOL = "0x01c9f11ad7fdca399b97a806beed69c219aff5b4c58c902897ace9b117bb8307";
 const SUI_SYSTEM_STATE = "0x5";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Legacy Contract Addresses ────────────────────────────────────────────────
+const LEGACY_PACKAGE = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
+const LEGACY_VAULT   = "0x0aa9c18818087b3e9e32c6eef8f3b17ce98670d5ac00eb54fd559d0d98db76be";
+
+
 function fmt(mist, dec = 3) {
   return (Number(BigInt(mist ?? 0)) / 1e9).toFixed(dec);
 }
@@ -45,7 +49,10 @@ export default function App() {
   const [stakeAmount, setStakeAmount] = useState("100");
   const [txStatus, setTxStatus] = useState(null);
   const [userReceipts, setUserReceipts] = useState([]);
+  const [legacyReceipts, setLegacyReceipts] = useState([]);
+  const [legacyStatus, setLegacyStatus] = useState(null);
   const [tick, setTick] = useState(0);
+  const [suiPrice, setSuiPrice] = useState(null);
 
   useEffect(() => {
     const t = setInterval(() => setTick(n => n + 1), 1000);
@@ -84,6 +91,89 @@ export default function App() {
   }, [account, client]);
 
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
+
+  // Fetch legacy receipts from old contract
+  const fetchLegacyReceipts = useCallback(async () => {
+    if (!account?.address) return;
+    try {
+      const objs = await client.getOwnedObjects({
+        owner: account.address,
+        filter: { StructType: `${LEGACY_PACKAGE}::stake_vault::StakeReceipt` },
+        options: { showContent: true },
+      });
+      setLegacyReceipts(objs.data.map(o => o.data?.content?.fields && { ...o.data.content.fields, objectId: o.data.objectId }).filter(Boolean));
+    } catch (e) { console.error(e); }
+  }, [account, client]);
+
+  useEffect(() => { fetchLegacyReceipts(); }, [fetchLegacyReceipts]);
+
+  async function handleLegacyRequestUnstake(receiptId) {
+    setLegacyStatus({ type: "pending", msg: "Requesting unstake..." });
+    try {
+      const tx = new Transaction();
+      tx.setGasPrice(1000);
+      tx.moveCall({
+        target: `${LEGACY_PACKAGE}::stake_vault::request_unstake`,
+        arguments: [tx.object(receiptId), tx.object("0x6")],
+      });
+      signAndExecute({ transaction: tx }, {
+        onSuccess: (r) => { setLegacyStatus({ type: "success", msg: `Unstake requested! Wait ~24h. Tx: ${r.digest.slice(0,16)}...` }); setTimeout(fetchLegacyReceipts, 3000); },
+        onError: (e) => setLegacyStatus({ type: "error", msg: e.message }),
+      });
+    } catch (e) { setLegacyStatus({ type: "error", msg: e.message }); }
+  }
+
+  async function handleLegacyWithdraw(receiptId) {
+    setLegacyStatus({ type: "pending", msg: "Step 1/2: Creating loyalty record..." });
+    try {
+      // Step 1: Create LoyaltyRecord
+      const tx1 = new Transaction();
+      tx1.setGasPrice(1000);
+      const record = tx1.moveCall({
+        target: `${LEGACY_PACKAGE}::loyalty_tracker::new_record`,
+        arguments: [tx1.object("0x6")],
+      });
+      tx1.transferObjects([record], tx1.pure.address(account.address));
+
+      signAndExecute({ transaction: tx1 }, {
+        onSuccess: async (r1) => {
+          setLegacyStatus({ type: "pending", msg: "Step 2/2: Withdrawing SUI..." });
+
+          // Find the created LoyaltyRecord object
+          await new Promise(res => setTimeout(res, 3000));
+          const objs = await client.getOwnedObjects({
+            owner: account.address,
+            filter: { StructType: `${LEGACY_PACKAGE}::loyalty_tracker::LoyaltyRecord` },
+            options: { showContent: true },
+          });
+          if (!objs.data.length) {
+            setLegacyStatus({ type: "error", msg: "LoyaltyRecord not found after creation" });
+            return;
+          }
+          const loyaltyId = objs.data[0].data.objectId;
+
+          // Step 2: Withdraw
+          const tx2 = new Transaction();
+          tx2.setGasPrice(1000);
+          tx2.moveCall({
+            target: `${LEGACY_PACKAGE}::stake_vault::withdraw`,
+            arguments: [
+              tx2.object(LEGACY_VAULT),
+              tx2.sharedObjectRef({ objectId: "0x0000000000000000000000000000000000000000000000000000000000000005", initialSharedVersion: 1, mutable: true }),
+              tx2.object(receiptId),
+              tx2.object(loyaltyId),
+              tx2.object("0x6"),
+            ],
+          });
+          signAndExecute({ transaction: tx2 }, {
+            onSuccess: (r2) => { setLegacyStatus({ type: "success", msg: `Withdrawn! Tx: ${r2.digest.slice(0,16)}...` }); setTimeout(fetchLegacyReceipts, 3000); },
+            onError: (e) => setLegacyStatus({ type: "error", msg: e.message }),
+          });
+        },
+        onError: (e) => setLegacyStatus({ type: "error", msg: e.message }),
+      });
+    } catch (e) { setLegacyStatus({ type: "error", msg: e.message }); }
+  }
 
   async function handleStake() {
     if (!account) return;
@@ -136,8 +226,18 @@ export default function App() {
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool]
     .reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
 
+  const myStakeMist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
+  const myStakeSui = myStakeMist / 1e9;
+
+  useEffect(() => {
+    fetch("https://api.coingecko.com/api/v3/simple/price?ids=sui&vs_currencies=usd")
+      .then(r => r.json())
+      .then(d => setSuiPrice(d?.sui?.usd ?? null))
+      .catch(() => {});
+  }, []);
+
   const draws = [
-    { name: "Spark", emoji: "⚡", color: "#F5C842", colorDim: "rgba(245,200,66,0.1)", freq: "Daily · 15 winners", share: "20%", pool: poolData?.spark_pool, next: drawData?.next_spark_ms },
+    { name: "Spark", emoji: "⚡", color: "#F5C842", colorDim: "rgba(245,200,66,0.1)", freq: "Every 6h · 3 winners", share: "20%", pool: poolData?.spark_pool, next: drawData?.next_spark_ms },
     { name: "Pulse", emoji: "🔄", color: "#3ABFAA", colorDim: "rgba(58,191,170,0.1)", freq: "Weekly · 4 winners", share: "30%", pool: poolData?.pulse_pool, next: drawData?.next_pulse_ms },
     { name: "Surge", emoji: "🌊", color: "#C67FE8", colorDim: "rgba(198,127,232,0.1)", freq: "Monthly · 1 jackpot", share: "50%", pool: poolData?.surge_pool, next: drawData?.next_surge_ms },
   ];
@@ -147,7 +247,7 @@ export default function App() {
       <nav className="nav">
         <div className="nav-left">
           <div className="nav-logo">SURGE</div>
-          <div className="nav-tagline">Prize-linked staking · Sui Testnet</div>
+          
         </div>
         <ConnectButton />
       </nav>
@@ -209,6 +309,29 @@ export default function App() {
             </div>
             <div style={{ fontSize: "0.75rem", color: "rgba(198,127,232,0.35)" }}>Spark · Pulse · Surge</div>
           </div>
+
+          {account && myStakeSui > 0 && <>
+            <div style={{ width: 1, background: "rgba(255,255,255,0.06)" }} />
+            <div style={{
+              flex: 1,
+              padding: "1.5rem 1.75rem",
+              background: "rgba(58,191,170,0.05)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.35rem",
+            }}>
+              <div style={{ fontSize: "0.7rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(58,191,170,0.6)", fontWeight: 600 }}>
+                My Stake
+              </div>
+              <div style={{ fontSize: "2rem", fontWeight: 700, color: "#3ABFAA", letterSpacing: "-0.02em", lineHeight: 1 }}>
+                {myStakeSui.toFixed(3)}
+                <span style={{ fontSize: "0.9rem", fontWeight: 400, color: "rgba(58,191,170,0.5)", marginLeft: 6 }}>SUI</span>
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "rgba(58,191,170,0.4)" }}>
+                {suiPrice ? `≈ $${(myStakeSui * suiPrice).toFixed(2)} USD` : "Loading price..."}
+              </div>
+            </div>
+          </>}
         </div>
       </header>
 
@@ -216,8 +339,10 @@ export default function App() {
         <section className="draws">
           {draws.map(d => {
             const { label, urgent } = countdown(d.next);
+            const diff = d.next ? Number(BigInt(d.next)) - Date.now() : Infinity;
+            const isFomo = d.name === "Spark" && diff > 0 && diff < 3600000;
             return (
-              <div className="draw-card" key={d.name} style={{ "--accent": d.color, "--accent-dim": d.colorDim }}>
+              <div className={`draw-card${isFomo ? " spark-fomo" : ""}`} key={d.name} style={{ "--accent": d.color, "--accent-dim": d.colorDim }}>
                 <div className="draw-header">
                   <span className="draw-emoji">{d.emoji}</span>
                   <span className="draw-name">{d.name}</span>
@@ -225,7 +350,7 @@ export default function App() {
                 </div>
                 <div className="draw-prize">{fmtSui(d.pool ?? 0)} <span className="draw-sui">SUI</span></div>
                 <div className="draw-freq">{d.freq}</div>
-                <div className={`draw-countdown ${urgent ? "urgent" : ""}`} key={tick}>{label}</div>
+                <div className={`draw-countdown ${isFomo ? "fomo" : urgent ? "urgent" : ""}`} key={tick}>{label}</div>
               </div>
             );
           })}
@@ -308,6 +433,37 @@ export default function App() {
                 </div>
                 {!r.unlock_ts_ms && (
                   <button className="unstake-btn" onClick={() => handleUnstake(r.id?.id)}>Unstake</button>
+                )}
+              </div>
+            ))}
+          </section>
+        )}
+
+        {account && legacyReceipts.length > 0 && (
+          <section className="panel positions" style={{ borderColor: "rgba(245,200,66,0.3)" }}>
+            <div className="panel-title" style={{ color: "#F5C842" }}>⚠️ Legacy Stakes (old contract)</div>
+            <p style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginBottom: "1rem" }}>
+              These stakes are from a previous contract version. Unstake and withdraw to recover your SUI.
+            </p>
+            {legacyStatus && (
+              <div className={`tx-status ${legacyStatus.type}`} style={{ marginBottom: "1rem" }}>{legacyStatus.msg}</div>
+            )}
+            {legacyReceipts.map((r, i) => (
+              <div className="position-row" key={i}>
+                <div>
+                  <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
+                  <div className="pos-status">{r.unlock_ts_ms ? "⏳ Ready to withdraw" : "🔒 Needs unstake request"}</div>
+                </div>
+                {!r.unlock_ts_ms ? (
+                  <button className="unstake-btn" style={{ background: "rgba(245,200,66,0.15)", color: "#F5C842", borderColor: "rgba(245,200,66,0.3)" }}
+                    onClick={() => handleLegacyRequestUnstake(r.objectId)}>
+                    Request Unstake
+                  </button>
+                ) : (
+                  <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }}
+                    onClick={() => handleLegacyWithdraw(r.objectId)}>
+                    Withdraw
+                  </button>
                 )}
               </div>
             ))}

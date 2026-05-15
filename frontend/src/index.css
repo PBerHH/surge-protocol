@@ -55,6 +55,15 @@ body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-s
 .draw-freq { font-size: 11px; font-family: 'DM Mono', monospace; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
 .draw-countdown { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text2); }
 .draw-countdown.urgent { color: var(--accent); font-weight: 500; }
+.draw-countdown.fomo { color: #FF6B35; font-weight: 600; animation: fomo-pulse 1s ease-in-out infinite; }
+
+@keyframes fomo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.draw-card.spark-fomo { border-color: rgba(255,107,53,0.4); box-shadow: 0 0 18px rgba(255,107,53,0.12); }
+.draw-card.spark-fomo::before { background: linear-gradient(90deg, var(--spark), #FF6B35); }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
