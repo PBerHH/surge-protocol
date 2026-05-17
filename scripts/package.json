@@ -4,14 +4,15 @@
   "description": "Automated draw orchestration for Surge Protocol",
   "main": "crank.ts",
   "scripts": {
-    "start": "ts-node crank.ts",
-    "dev": "nodemon --exec ts-node crank.ts"
+    "start": "node crank.js",
+    "dev": "nodemon --exec node crank.js"
   },
   "dependencies": {
     "@mysten/sui": "^1.0.0",
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
+    "@flydotio/dockerfile": "^0.7.10",
     "@types/node": "^20.12.7",
     "nodemon": "^3.1.0",
     "ts-node": "^10.9.2",

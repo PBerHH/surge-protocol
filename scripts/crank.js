@@ -16,13 +16,20 @@ const VAULT          = process.env.VAULT ?? '';
 const ADMIN_CAP_DRAW = process.env.ADMIN_CAP_DRAW ?? '';
 const POLL_MS        = 60_000;
 
-const APY            = 0.05;
-const YIELD_PER_TICK = APY / 365 / 24 / 60;
+let DYNAMIC_APY = 0.01503; // Triton One APY // fallback 1.5%
+async function fetchValidatorApy(client) {
+  try {
+    const resp = await fetch('https://fullnode.mainnet.sui.io', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({jsonrpc:'2.0',id:1,method:'suix_getValidatorApys',params:[]}) });
+    const data = await resp.json();
+    const v = data?.result?.apys?.find(x => x.address === '0xa608b66f7ae2201286f7dd07a8b073cde7955b35056629636a6c9b3f5275f384');
+    if (v?.apy) { DYNAMIC_APY = v.apy; console.log(`  📈 Validator APY: ${(v.apy*100).toFixed(3)}%`); }
+    else { console.log('  ⚠️ Validator not found, using fallback'); }
+  } catch(e) { console.log('  ⚠️ APY fetch failed, using fallback'); }
+}
 const MIN_YIELD_MIST = 1_000_000n;
 
 function loadKeypair() {
-  const keystorePath = `${os.homedir()}/.sui/sui_config/sui.keystore`;
-  const keystore = JSON.parse(fs.readFileSync(keystorePath, 'utf-8'));
+  const keystore = process.env.KEYSTORE ? JSON.parse(process.env.KEYSTORE) : JSON.parse(fs.readFileSync(`${os.homedir()}/.sui/sui_config/sui.keystore`, 'utf-8'));
   const raw = fromB64(keystore[1]);
   const secret = raw.length === 33 ? raw.slice(1) : raw;
   return Ed25519Keypair.fromSecretKey(secret);
@@ -100,7 +107,7 @@ async function fetchStakers(client) {
 
 async function simulateYield(client, keypair, totalStaked) {
   if (totalStaked === 0n) { console.log('  💤 No stakers — skipping yield'); return; }
-  const yieldMist = BigInt(Math.floor(Number(totalStaked) * YIELD_PER_TICK));
+  const yieldMist = BigInt(Math.floor(Number(totalStaked) * DYNAMIC_APY / 365 / 24 / 60));
   if (yieldMist < MIN_YIELD_MIST) { console.log(`  💤 Yield too small (${yieldMist} MIST) — skipping`); return; }
   console.log(`  🌱 Injecting yield: ${(Number(yieldMist)/1e9).toFixed(6)} SUI`);
   try {
@@ -198,6 +205,7 @@ async function tick(client, keypair) {
   const fmt = n => (Number(n)/1e9).toFixed(4);
   console.log(`  🏦 Vault — staked: ${fmt(vault.totalStaked)} SUI · pending yield: ${fmt(vault.pendingYield)} SUI`);
 
+  await fetchValidatorApy(client);
   await simulateYield(client, keypair, vault.totalStaked);
 
   const vaultAfter = await fetchVault(client);
