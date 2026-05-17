@@ -3,15 +3,17 @@ import { ConnectButton, useCurrentAccount, useSuiClient, useSignAndExecuteTransa
 import { Transaction } from "@mysten/sui/transactions";
 
 // ── Contract Config ─────────────────────────────────────────────────────────
-const PACKAGE    = "0x51ce7917adc5b9d7e7faa5988dfbbc1e2abbac5ae14cb38834f23e9a1d6109dc";
-const VAULT      = "0x0430bf6c920033e5df27a371071a2f54844da65a103d08e35fb316eaa7134db9";
-const DRAW_STATE = "0xeef1e8b93dca1c0aa012d0cc6213874a9d1cabe0a30753e0abbc925a74099ce8";
-const REWARD_POOL = "0x3f9e307e7e83f1367219e0aae6437966267c36291f6b3fe01b0d318c2987ac31";
+const PACKAGE    = "0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50";
+const VAULT      = "0x5cd4c73e20d876b1105fa49049e1ee903e9eac382867ce1d597719c5877e6a26";
+const DRAW_STATE = "0x5e8faab779a88ed2efa9f8523f66ff6238d5e5d7f64b45b365fc05a048e94a2b";
+const REWARD_POOL = "0x2a0bc690ff0c1acb1d30b3b51c151444ff8fca09e557a64a423ac3583462f846";
 const SUI_SYSTEM_STATE = "0x5";
 
 // ── Legacy Contract Addresses ────────────────────────────────────────────────
 const LEGACY_PACKAGE = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
 const LEGACY_VAULT   = "0x0aa9c18818087b3e9e32c6eef8f3b17ce98670d5ac00eb54fd559d0d98db76be";
+const LEGACY2_PACKAGE = "0x51ce7917adc5b9d7e7faa5988dfbbc1e2abbac5ae14cb38834f23e9a1d6109dc";
+const LEGACY2_VAULT   = "0x0430bf6c920033e5df27a371071a2f54844da65a103d08e35fb316eaa7134db9";
 
 
 function fmt(mist, dec = 3) {
@@ -53,6 +55,8 @@ export default function App() {
   const [legacyStatus, setLegacyStatus] = useState(null);
   const [tick, setTick] = useState(0);
   const [suiPrice, setSuiPrice] = useState(null);
+  const [lastWinners, setLastWinners] = useState([]);
+  const [openFaq, setOpenFaq] = useState(null);
 
   useEffect(() => {
     const t = setInterval(() => setTick(n => n + 1), 1000);
@@ -78,6 +82,32 @@ export default function App() {
     return () => clearInterval(t);
   }, [fetchData]);
 
+
+  const fetchLastWinners = useCallback(async () => {
+    try {
+      const events = await client.queryEvents({
+        query: { MoveModule: { package: PACKAGE, module: 'reward_pool' } },
+        limit: 9,
+        order: 'descending',
+      });
+      const winners = events.data
+        .filter(e => e.type?.includes('PrizeAwarded') && Number(e.parsedJson?.amount_mist) > 0)
+        .map(e => ({
+          winner: e.parsedJson.winner,
+          amount: Number(e.parsedJson.amount_mist) / 1e9,
+          pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw',
+          ts: e.timestampMs,
+        }));
+      setLastWinners(winners);
+    } catch (e) { console.error(e); }
+  }, [client]);
+
+  useEffect(() => {
+    fetchLastWinners();
+    const t = setInterval(fetchLastWinners, 30000);
+    return () => clearInterval(t);
+  }, [fetchLastWinners]);
+
   const fetchReceipts = useCallback(async () => {
     if (!account?.address) return;
     try {
@@ -92,28 +122,29 @@ export default function App() {
 
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
 
-  // Fetch legacy receipts from old contract
+  // Fetch legacy receipts from all old contracts
   const fetchLegacyReceipts = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const objs = await client.getOwnedObjects({
-        owner: account.address,
-        filter: { StructType: `${LEGACY_PACKAGE}::stake_vault::StakeReceipt` },
-        options: { showContent: true },
-      });
-      setLegacyReceipts(objs.data.map(o => o.data?.content?.fields && { ...o.data.content.fields, objectId: o.data.objectId }).filter(Boolean));
+      const [objs1, objs2] = await Promise.all([
+        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
+        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY2_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
+      ]);
+      const r1 = objs1.data.map(o => o.data?.content?.fields && { ...o.data.content.fields, objectId: o.data.objectId, legacyPkg: LEGACY_PACKAGE, legacyVault: LEGACY_VAULT }).filter(Boolean);
+      const r2 = objs2.data.map(o => o.data?.content?.fields && { ...o.data.content.fields, objectId: o.data.objectId, legacyPkg: LEGACY2_PACKAGE, legacyVault: LEGACY2_VAULT }).filter(Boolean);
+      setLegacyReceipts([...r1, ...r2]);
     } catch (e) { console.error(e); }
   }, [account, client]);
 
   useEffect(() => { fetchLegacyReceipts(); }, [fetchLegacyReceipts]);
 
-  async function handleLegacyRequestUnstake(receiptId) {
+  async function handleLegacyRequestUnstake(receiptId, pkg) {
     setLegacyStatus({ type: "pending", msg: "Requesting unstake..." });
     try {
       const tx = new Transaction();
       tx.setGasPrice(1000);
       tx.moveCall({
-        target: `${LEGACY_PACKAGE}::stake_vault::request_unstake`,
+        target: `${pkg}::stake_vault::request_unstake`,
         arguments: [tx.object(receiptId), tx.object("0x6")],
       });
       signAndExecute({ transaction: tx }, {
@@ -123,14 +154,14 @@ export default function App() {
     } catch (e) { setLegacyStatus({ type: "error", msg: e.message }); }
   }
 
-  async function handleLegacyWithdraw(receiptId) {
+  async function handleLegacyWithdraw(receiptId, pkg, vault) {
     setLegacyStatus({ type: "pending", msg: "Step 1/2: Creating loyalty record..." });
     try {
       // Step 1: Create LoyaltyRecord
       const tx1 = new Transaction();
       tx1.setGasPrice(1000);
       const record = tx1.moveCall({
-        target: `${LEGACY_PACKAGE}::loyalty_tracker::new_record`,
+        target: `${pkg}::loyalty_tracker::new_record`,
         arguments: [tx1.object("0x6")],
       });
       tx1.transferObjects([record], tx1.pure.address(account.address));
@@ -143,7 +174,7 @@ export default function App() {
           await new Promise(res => setTimeout(res, 3000));
           const objs = await client.getOwnedObjects({
             owner: account.address,
-            filter: { StructType: `${LEGACY_PACKAGE}::loyalty_tracker::LoyaltyRecord` },
+            filter: { StructType: `${pkg}::loyalty_tracker::LoyaltyRecord` },
             options: { showContent: true },
           });
           if (!objs.data.length) {
@@ -156,9 +187,9 @@ export default function App() {
           const tx2 = new Transaction();
           tx2.setGasPrice(1000);
           tx2.moveCall({
-            target: `${LEGACY_PACKAGE}::stake_vault::withdraw`,
+            target: `${pkg}::stake_vault::withdraw`,
             arguments: [
-              tx2.object(LEGACY_VAULT),
+              tx2.object(vault),
               tx2.sharedObjectRef({ objectId: "0x0000000000000000000000000000000000000000000000000000000000000005", initialSharedVersion: 1, mutable: true }),
               tx2.object(receiptId),
               tx2.object(loyaltyId),
@@ -339,7 +370,7 @@ export default function App() {
         <section className="draws">
           {draws.map(d => {
             const { label, urgent } = countdown(d.next);
-            const diff = d.next ? Number(BigInt(d.next)) - Date.now() : Infinity;
+            const diff = d.next && d.next !== '0' ? Number(BigInt(d.next)) - Date.now() : Infinity;
             const isFomo = d.name === "Spark" && diff > 0 && diff < 3600000;
             return (
               <div className={`draw-card${isFomo ? " spark-fomo" : ""}`} key={d.name} style={{ "--accent": d.color, "--accent-dim": d.colorDim }}>
@@ -456,12 +487,12 @@ export default function App() {
                 </div>
                 {!r.unlock_ts_ms ? (
                   <button className="unstake-btn" style={{ background: "rgba(245,200,66,0.15)", color: "#F5C842", borderColor: "rgba(245,200,66,0.3)" }}
-                    onClick={() => handleLegacyRequestUnstake(r.objectId)}>
+                    onClick={() => handleLegacyRequestUnstake(r.objectId, r.legacyPkg)}>
                     Request Unstake
                   </button>
                 ) : (
                   <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }}
-                    onClick={() => handleLegacyWithdraw(r.objectId)}>
+                    onClick={() => handleLegacyWithdraw(r.objectId, r.legacyPkg, r.legacyVault)}>
                     Withdraw
                   </button>
                 )}
@@ -471,8 +502,62 @@ export default function App() {
         )}
       </main>
 
+
+        {lastWinners.length > 0 && (
+          <section className="panel" style={{ marginTop: 0 }}>
+            <div className="panel-title">🏆 Recent Winners</div>
+            {lastWinners.map((w, i) => (
+              <div className="position-row" key={i}>
+                <div>
+                  <div className="pos-amount" style={{ fontSize: "0.85rem" }}>
+                    <span style={{ color: w.pool === 'Spark' ? '#F5C842' : w.pool === 'Pulse' ? '#3ABFAA' : '#C67FE8', marginRight: 8 }}>
+                      {w.pool === 'Spark' ? '⚡' : w.pool === 'Pulse' ? '🔄' : '🌊'} {w.pool}
+                    </span>
+                    <span style={{ color: 'rgba(255,255,255,0.4)', fontFamily: 'DM Mono, monospace', fontSize: '0.75rem' }}>
+                      {w.winner.slice(0, 6)}...{w.winner.slice(-4)}
+                    </span>
+                  </div>
+                  <div className="pos-status">{new Date(Number(w.ts)).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
+                </div>
+                <div style={{ fontFamily: 'DM Mono, monospace', color: '#3ABFAA', fontWeight: 600 }}>
+                  +{w.amount.toFixed(4)} SUI
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+
+
+        <section style={{ maxWidth: 800, margin: "0 auto", padding: "0 0 2rem" }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.14em", color: "rgba(255,255,255,0.3)", marginBottom: "1rem" }}>FAQ</div>
+          {[
+            { q: "Is my principal safe?", a: "Yes. Your deposited SUI is delegated to Triton One validator via Sui's native staking. Only the staking yield goes into prize pools — your principal is never at risk and can always be withdrawn." },
+            { q: "How does the prize pool get funded?", a: "When you stake SUI, it earns ~1.5% APY from Triton One. This yield is automatically harvested and split: 20% into Spark, 30% into Pulse, 50% into Surge. A 2% protocol fee is deducted before distribution." },
+            { q: "How are winners selected?", a: "Winners are chosen using Pyth Entropy VRF — a verifiable random function on-chain. Every staker gets tickets proportional to their stake. The more you stake, the higher your chances." },
+            { q: "How often are draws held?", a: "Spark draws every 6 hours (3 winners), Pulse weekly (4 winners), Surge monthly (1 jackpot winner). All draws are fully automated by the Crank." },
+            { q: "What is the unstake delay?", a: "1 epoch (~24 hours). After requesting unstake you wait one epoch, then you can withdraw your full principal." },
+            { q: "What is the protocol fee?", a: "2% of yield is taken as a protocol fee at harvest time. This goes directly to the fee wallet. Your principal is never charged." },
+            { q: "Which validator is used?", a: "Triton One — a professional, high-performance validator on Sui Mainnet with 99.9% uptime and 4% commission rate." },
+            { q: "Is the contract audited?", a: "The protocol was built for Sui Overflow 2026 and is open source on GitHub. A formal audit is planned post-hackathon." },
+          ].map((item, i) => (
+            <div key={i} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", overflow: "hidden" }}>
+              <button
+                onClick={() => setOpenFaq(openFaq === i ? null : i)}
+                style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1rem 0", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
+              >
+                <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: "0.9rem", color: "rgba(255,255,255,0.85)", fontWeight: 500 }}>{item.q}</span>
+                <span style={{ color: "rgba(255,255,255,0.3)", fontSize: "1.2rem", lineHeight: 1, transform: openFaq === i ? "rotate(45deg)" : "none", transition: "transform 0.2s" }}>+</span>
+              </button>
+              {openFaq === i && (
+                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: "0.8rem", color: "rgba(255,255,255,0.45)", lineHeight: 1.7, paddingBottom: "1rem" }}>
+                  {item.a}
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
       <footer className="footer">
-        <span>Surge Protocol · Sui Mainnet · V2 · Built for Sui Overflow 2026</span>
+        <span>Surge Protocol · Sui Mainnet · V2</span>
         <a href="https://github.com/PBerHH/surge-protocol" target="_blank" rel="noreferrer">GitHub ↗</a>
       </footer>
     </div>
