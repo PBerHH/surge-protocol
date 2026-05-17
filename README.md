@@ -1,22 +1,33 @@
 # Surge Protocol
 
-**Prize-linked staking on Sui.** Your principal is always safe — only the yield wins prizes.
+**Prize-linked staking on Sui Mainnet.** Your principal is always safe — only the yield wins prizes.
 
-> Built for [Sui Overflow 2026](https://overflow.sui.io) · DeFi & Payments Track
+🌐 [surge-protocol-chi.vercel.app](https://surge-protocol-chi.vercel.app) · 📦 [Mainnet Contract](https://suiscan.xyz/mainnet/object/0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50)
 
 ---
 
 ## What is Surge?
 
-Surge is inspired by UK Premium Bonds (£120B TVL, 70+ years of product-market fit) — but removes every middleman. Users deposit SUI, it gets staked automatically, and instead of receiving small predictable rewards, the pooled yield is distributed as prizes through three draw types.
+Surge is inspired by UK Premium Bonds — but removes every middleman. Users deposit SUI, it gets natively staked to Triton One validator, and instead of receiving small predictable rewards, the pooled yield is distributed as prizes through three automated draw types.
+
+**Principal is never at risk.** Full withdrawal available anytime after a 1-epoch (~24h) delay.
 
 | Draw | Frequency | Winners | Pool Share | Min. Stake |
 |------|-----------|---------|------------|------------|
-| ⚡ Spark | Daily | 15 | 20% | 10 SUI |
+| ⚡ Spark | Every 6h | 3 | 20% | 10 SUI |
 | 🔄 Pulse | Weekly | 4 | 30% | 50 SUI |
 | 🌊 Surge | Monthly | 1 jackpot | 50% | 200 SUI |
 
-**Principal is never at risk.** Full withdrawal available anytime after a 1-epoch delay.
+---
+
+## How It Works
+
+1. **Deposit SUI** → delegated to Triton One validator via `sui_system::request_add_stake_non_entry`
+2. **Yield accumulates** → harvested automatically by the Crank (~1.5% APY)
+3. **2% protocol fee** deducted at harvest, sent directly to fee wallet
+4. **Prizes distributed** → 20% Spark / 30% Pulse / 50% Surge pools
+5. **Winners selected** via Pyth Entropy VRF — verifiable, on-chain randomness
+6. **Unstake anytime** → 1-epoch delay, principal always returned in full
 
 ---
 
@@ -28,7 +39,7 @@ Surge is inspired by UK Premium Bonds (£120B TVL, 70+ years of product-market f
 sources/
 ├── loyalty_tracker.move   # Time-weighted multiplier 1.0x → 2.0x over 365 days
 ├── ticket_engine.move     # Anti-whale ticket formulas per draw type
-├── stake_vault.move       # Principal custody + 1-epoch unstaking delay
+├── stake_vault.move       # Native staking + 1-epoch unstaking delay
 ├── reward_pool.move       # 3 pools (20/30/50%) + 2% protocol fee
 └── draw_manager.move      # Draw orchestration + Pyth Entropy VRF
 ```
@@ -50,19 +61,19 @@ Surge:  stake_SUI                                     × loyalty_multiplier
 | 30–89 days | 1.2x |
 | 90–179 days | 1.5x |
 | 180–364 days | 1.8x |
-| 365+ days | 2.0x (hard cap) |
-
-Streak bonus: up to +0.3x for 30 consecutive days staked.
+| 365+ days | 2.0x |
 
 ---
 
-## Testnet Deployment (V1)
+## Mainnet Deployment
 
 | Object | ID |
 |--------|----|
-| Package | `0xa48d643d834ef46af785831b5d9d32c4055229bc2c78ec5ff76f61ffadab4b0a` |
-| RewardPool | `0xf329f0952dd4464dac02810b95e206f43e3754f5f30d11cda01185abe5041804` |
-| DrawState | `0x952a695a98c9297bfe46cb71f10b6a41143924b3ee5069dfc8c12ac1e36478a5` |
+| Package | `0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50` |
+| Vault | `0x5cd4c73e20d876b1105fa49049e1ee903e9eac382867ce1d597719c5877e6a26` |
+| RewardPool | `0x2a0bc690ff0c1acb1d30b3b51c151444ff8fca09e557a64a423ac3583462f846` |
+| DrawState | `0x5e8faab779a88ed2efa9f8523f66ff6238d5e5d7f64b45b365fc05a048e94a2b` |
+| Validator | Triton One `0xa608b66f...5384` |
 
 ---
 
@@ -70,7 +81,7 @@ Streak bonus: up to +0.3x for 30 consecutive days staked.
 
 ### Prerequisites
 - [Sui CLI](https://docs.sui.io/guides/developer/getting-started/sui-install) `>= 1.73.0`
-- Node.js `>= 18` (for crank script)
+- Node.js `>= 18`
 
 ### Build & Test
 
@@ -78,45 +89,41 @@ Streak bonus: up to +0.3x for 30 consecutive days staked.
 git clone https://github.com/PBerHH/surge-protocol
 cd surge-protocol
 
-# Build V2
-cd surge
+# Build
 sui move build
 
-# Run tests
+# Run tests (21/21)
 sui move test
 ```
 
-### Deploy to Testnet
+### Deploy to Mainnet
 
 ```bash
-# Get testnet SUI
-sui client faucet
-
-# Deploy
-sui client publish --gas-budget 200000000
-
-# Note the Package ID and object IDs from the output
+sui client publish --gas-budget 100000000
 ```
 
 ### Run the Crank
 
 ```bash
 cd scripts
+cp .env.example .env   # fill in your contract addresses
 npm install
-PACKAGE_ID=0x... DRAW_STATE=0x... REWARD_POOL=0x... npx ts-node crank.ts
+node crank.js
 ```
+
+The Crank runs on [Fly.io](https://fly.io) in production — harvests yield, runs draws automatically every minute.
 
 ---
 
-## Economics (at 1M SUI TVL, 5% APY)
+## Economics (at 100K SUI TVL, 1.5% APY)
 
 | | Amount |
 |-|--------|
-| Yearly yield | 50,000 SUI |
-| Protocol fee (2%) | 1,000 SUI/year |
-| Spark pool | ~2.7 SUI/day distributed to 15 winners |
-| Pulse pool | ~188 SUI/week distributed to 4 winners |
-| Surge jackpot | ~1,225 SUI/month to 1 winner |
+| Yearly yield | 1,500 SUI |
+| Protocol fee (2%) | 30 SUI/year |
+| Spark pool | ~0.16 SUI per draw (every 6h, 3 winners) |
+| Pulse pool | ~8.6 SUI/week (4 winners) |
+| Surge jackpot | ~37 SUI/month (1 winner) |
 
 ---
 
@@ -126,14 +133,14 @@ Winner selection uses **Pyth Entropy** — verifiable, manipulation-resistant on
 
 ---
 
-## Roadmap
+## Tech Stack
 
-- [x] V1 deployed on Sui Testnet
-- [x] V2 contracts designed (5 modules)
-- [ ] V2 Testnet deploy
-- [ ] Frontend with `@mysten/dapp-kit` wallet integration
-- [ ] Security audit (OtterSec / MixBytes)
-- [ ] Mainnet launch
+- **Smart Contracts**: Sui Move (5 modules, 21 tests)
+- **Frontend**: React + Vite + `@mysten/dapp-kit`
+- **Crank**: Node.js, deployed on Fly.io
+- **Hosting**: Vercel
+- **Validator**: Triton One (Sui Mainnet)
+- **Randomness**: Pyth Entropy VRF
 
 ---
 
@@ -143,4 +150,4 @@ MIT
 
 ---
 
-*Surge Protocol — built on Sui. Your principal is always safe. Only the yield wins prizes.*
+*Surge Protocol — Your principal is always safe. Only the yield wins prizes.*
