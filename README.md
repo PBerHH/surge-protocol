@@ -1,153 +1,161 @@
-# Surge Protocol
+# 🌊 Surge Protocol
 
-**Prize-linked staking on Sui Mainnet.** Your principal is always safe — only the yield wins prizes.
+**Prize-linked staking on Sui. Your principal is always safe — only the yield wins prizes.**
 
-🌐 [surge-protocol-chi.vercel.app](https://surge-protocol-chi.vercel.app) · 📦 [Mainnet Contract](https://suiscan.xyz/mainnet/object/0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50)
+Live: [surge-protocol-chi.vercel.app](https://surge-protocol-chi.vercel.app)
 
 ---
 
 ## What is Surge?
 
-Surge is inspired by UK Premium Bonds — but removes every middleman. Users deposit SUI, it gets natively staked to Triton One validator, and instead of receiving small predictable rewards, the pooled yield is distributed as prizes through three automated draw types.
+Surge is a no-loss lottery built on Sui. Users stake SUI, earn yield, and that yield funds prize pools. Your principal is never at risk — you can always withdraw everything you put in.
 
-**Principal is never at risk.** Full withdrawal available anytime after a 1-epoch (~24h) delay.
-
-| Draw | Frequency | Winners | Pool Share | Min. Stake |
-|------|-----------|---------|------------|------------|
-| ⚡ Spark | Every 6h | 3 | 20% | 10 SUI |
-| 🔄 Pulse | Weekly | 4 | 30% | 50 SUI |
-| 🌊 Surge | Monthly | 1 jackpot | 50% | 200 SUI |
+Think of it like a savings account where instead of earning interest, you get lottery tickets.
 
 ---
 
-## How It Works
+## How it works
 
-1. **Deposit SUI** → delegated to Triton One validator via `sui_system::request_add_stake_non_entry`
-2. **Yield accumulates** → harvested automatically by the Crank (~1.5% APY)
-3. **2% protocol fee** deducted at harvest, sent directly to fee wallet
-4. **Prizes distributed** → 20% Spark / 30% Pulse / 50% Surge pools
-5. **Winners selected** via Pyth Entropy VRF — verifiable, on-chain randomness
-6. **Unstake anytime** → 1-epoch delay, principal always returned in full
+1. **Stake SUI** — deposit into the Surge vault (minimum 1 SUI)
+2. **Earn tickets** — the more you stake, the more draw tickets you get
+3. **Yield funds prizes** — ~1.5% APY yield is harvested and split into prize pools
+4. **Draws happen automatically** — the Crank triggers draws on-chain
+5. **Winners are paid** — directly to their wallet, no claiming needed
+
+### Draw schedule
+
+| Draw | Frequency | Winners | Pool share |
+|------|-----------|---------|------------|
+| ⚡ Spark | Every 6 hours | 3 | 20% |
+| 🔄 Pulse | Weekly | 4 | 30% |
+| 🌊 Surge | Monthly | 1 jackpot | 50% |
+
+### Ticket gates
+
+| Draw | Minimum stake |
+|------|--------------|
+| ⚡ Spark | 10 SUI |
+| 🔄 Pulse | 50 SUI |
+| 🌊 Surge | 200 SUI |
+
+---
+
+## Security
+
+Three critical vulnerabilities were identified and fixed:
+
+### Fix 1: VRF Manipulation
+**Problem:** `vrf_bytes` came from the Crank (Node.js `randomBytes`) — the operator could predict winners.  
+**Fix:** Replaced with `sui::random::Random` — on-chain verifiable randomness that no one can manipulate.
+
+### Fix 2: Unprotected Prize Claims
+**Problem:** `award_spark/pulse/surge()` were `public` without any access control — anyone could drain the prize pools.  
+**Fix:** All award functions now require `PoolAdminCap`.
+
+### Fix 3: Yield Theft
+**Problem:** `harvest_yield()` was `public` — anyone could steal accumulated yield.  
+**Fix:** `harvest_yield()` now requires `VaultAdminCap`.
+
+### Security badges
+- 🔐 **On-chain VRF** — `sui::random`, not operator-controlled
+- 🛡️ **AdminCap Protected** — no public drain vectors
+- 🔒 **Principal Safe** — user funds never at risk
+- ⛓️ **Open Source** — fully verifiable on GitHub
 
 ---
 
 ## Architecture
 
-### 5 Move Modules
-
 ```
-sources/
-├── loyalty_tracker.move   # Time-weighted multiplier 1.0x → 2.0x over 365 days
-├── ticket_engine.move     # Anti-whale ticket formulas per draw type
-├── stake_vault.move       # Native staking + 1-epoch unstaking delay
-├── reward_pool.move       # 3 pools (20/30/50%) + 2% protocol fee
-└── draw_manager.move      # Draw orchestration + Pyth Entropy VRF
+┌─────────────────────────────────────────────────┐
+│                  Frontend (React)                │
+│         surge-protocol-chi.vercel.app            │
+└──────────────────┬──────────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────────┐
+│              Sui Mainnet Contracts               │
+│                                                  │
+│  stake_vault    ──→  reward_pool                 │
+│  (user funds)        (prize pools)               │
+│       │                    │                     │
+│       └──→  draw_manager ◄─┘                    │
+│             (sui::random VRF)                    │
+│                    │                             │
+│             loyalty_tracker                      │
+│             ticket_engine                        │
+└──────────────────┬──────────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────────┐
+│              Crank (Node.js)                     │
+│              Fly.io — surge-crank                │
+│  - Injects simulated yield every minute          │
+│  - Harvests yield → reward pool                  │
+│  - Registers tickets for stakers                 │
+│  - Triggers draws when due                       │
+└─────────────────────────────────────────────────┘
 ```
-
-### Ticket Formula
-
-```
-Spark:  min(stake_SUI, 500)                           × loyalty_multiplier
-Pulse:  stake < 1K  → linear
-        stake ≥ 1K  → 1000 + √(stake - 1000)         × loyalty_multiplier
-Surge:  stake_SUI                                     × loyalty_multiplier
-```
-
-### Loyalty Tiers
-
-| Duration | Multiplier |
-|----------|-----------|
-| 0–29 days | 1.0x |
-| 30–89 days | 1.2x |
-| 90–179 days | 1.5x |
-| 180–364 days | 1.8x |
-| 365+ days | 2.0x |
 
 ---
 
-## Mainnet Deployment
+## Contract addresses (Mainnet)
 
-| Object | ID |
-|--------|----|
-| Package | `0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50` |
-| Vault | `0x5cd4c73e20d876b1105fa49049e1ee903e9eac382867ce1d597719c5877e6a26` |
-| RewardPool | `0x2a0bc690ff0c1acb1d30b3b51c151444ff8fca09e557a64a423ac3583462f846` |
-| DrawState | `0x5e8faab779a88ed2efa9f8523f66ff6238d5e5d7f64b45b365fc05a048e94a2b` |
-| Validator | Triton One `0xa608b66f...5384` |
+| Object | Address |
+|--------|---------|
+| Package | `0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3` |
+| Vault | `0x4bca5b44fcbb3cf79f3586c3ff4e4d3494975f1d8434de067a9a95b792150992` |
+| DrawState | `0xee9f68a29ab16442600a9e12426431b240aed97cdf5108f44d8325401cc25fb0` |
+| RewardPool | `0xacf68b636a55c96a8269ab0b66d735a7bbfadf058821cc17f97bc32d49d6968f` |
+
+Upgrade policy: `incompatible` — full flexibility for future improvements.  
+UpgradeCap: `0x5921d677eb94f7020c04eeb37bc4299b5ec00d8bd1ba47d656c6055a93a1c32f`
 
 ---
 
-## Local Setup
+## Tech stack
 
-### Prerequisites
-- [Sui CLI](https://docs.sui.io/guides/developer/getting-started/sui-install) `>= 1.73.0`
-- Node.js `>= 18`
+- **Smart contracts** — Sui Move (Mainnet)
+- **Randomness** — `sui::random` (on-chain VRF)
+- **Frontend** — React + Vite + @mysten/dapp-kit
+- **Crank** — Node.js on Fly.io
+- **Hosting** — Vercel
 
-### Build & Test
+---
 
+## Running locally
+
+### Contracts
 ```bash
-git clone https://github.com/PBerHH/surge-protocol
 cd surge-protocol
-
-# Build
-sui move build
-
-# Run tests (21/21)
-sui move test
+sui client publish --gas-budget 200000000
 ```
 
-### Deploy to Mainnet
-
+### Frontend
 ```bash
-sui client publish --gas-budget 100000000
+cd frontend
+npm install
+npm run dev
 ```
 
-### Run the Crank
-
+### Crank
 ```bash
 cd scripts
-cp .env.example .env   # fill in your contract addresses
-npm install
+cp .env.example .env  # fill in contract addresses and private key
 node crank.js
 ```
 
-The Crank runs on [Fly.io](https://fly.io) in production — harvests yield, runs draws automatically every minute.
+---
+
+## Roadmap
+
+- [ ] Migrate function UI (one-click contract migration)
+- [ ] Duplicate winner prevention in draws
+- [ ] On-chain ticket calculation via `ticket_engine`
+- [ ] Formal security audit
+- [ ] UpgradeCap timelock for decentralization
+- [ ] Multi-validator support
 
 ---
 
-## Economics (at 100K SUI TVL, 1.5% APY)
+## Built for Sui Overflow 2026
 
-| | Amount |
-|-|--------|
-| Yearly yield | 1,500 SUI |
-| Protocol fee (2%) | 30 SUI/year |
-| Spark pool | ~0.16 SUI per draw (every 6h, 3 winners) |
-| Pulse pool | ~8.6 SUI/week (4 winners) |
-| Surge jackpot | ~37 SUI/month (1 winner) |
-
----
-
-## Randomness
-
-Winner selection uses **Pyth Entropy** — verifiable, manipulation-resistant on-chain VRF. The seed is public, the selection formula is deterministic, and the result is auditable by anyone.
-
----
-
-## Tech Stack
-
-- **Smart Contracts**: Sui Move (5 modules, 21 tests)
-- **Frontend**: React + Vite + `@mysten/dapp-kit`
-- **Crank**: Node.js, deployed on Fly.io
-- **Hosting**: Vercel
-- **Validator**: Triton One (Sui Mainnet)
-- **Randomness**: Pyth Entropy VRF
-
----
-
-## License
-
-MIT
-
----
-
-*Surge Protocol — Your principal is always safe. Only the yield wins prizes.*
+Surge Protocol was built for the Sui Overflow 2026 hackathon.
