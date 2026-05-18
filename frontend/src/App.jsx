@@ -310,7 +310,7 @@ export default function App() {
           const loyaltyId = objs.data[0].data.objectId;
           // Old contracts (0xc44d, 0x51ce) need @0x5 SuiSystemState param
           // New contracts (0x2755+) use simpler withdraw without @0x5
-          const needsSuiSystem = pkg === LEGACY_PACKAGE || pkg === LEGACY2_PACKAGE || pkg === LEGACY3_PACKAGE;
+          const needsSuiSystem = pkg === LEGACY_PACKAGE || pkg === LEGACY2_PACKAGE;
           const tx2 = new Transaction();
           tx2.setGasPrice(1000);
           if (needsSuiSystem) {
