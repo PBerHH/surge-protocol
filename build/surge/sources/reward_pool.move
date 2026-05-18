@@ -1,7 +1,5 @@
-/// Surge V2 — Reward Pool
-/// Splits harvested yield into three pools:
-///   Spark  20% · Pulse  30% · Surge  50%
-/// 2% protocol fee taken before split → sent directly to fee_recipient.
+/// Surge V2 — Reward Pool (Security Fix)
+/// Fix: award_* functions now require PoolAdminCap → prevents public pool draining
 module surge::reward_pool {
 
     use sui::object::{Self, UID};
@@ -19,7 +17,6 @@ module surge::reward_pool {
     const SURGE_BP: u64 = 5_000;
     const BP_DENOM: u64 = 10_000;
 
-    // Fee recipient — all protocol fees go here automatically
     const FEE_RECIPIENT: address = @0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95;
 
     const E_INSUFFICIENT_BALANCE: u64 = 1;
@@ -32,7 +29,8 @@ module surge::reward_pool {
         surge_pool: Balance<SUI>,
     }
 
-    public struct AdminCap has key, store { id: UID }
+    /// NEW: Required for award_* and deposit_yield calls
+    public struct PoolAdminCap has key, store { id: UID }
 
     public struct YieldDeposited has copy, drop {
         gross_mist: u64,
@@ -58,14 +56,15 @@ module surge::reward_pool {
             surge_pool: balance::zero<SUI>(),
         };
         transfer::share_object(pool);
-        let cap = AdminCap { id: object::new(ctx) };
+        let cap = PoolAdminCap { id: object::new(ctx) };
         transfer::transfer(cap, admin);
     }
 
-    /// Accept yield, deduct 2% fee → sent directly to FEE_RECIPIENT, split rest into pools.
+    /// Accept yield — requires PoolAdminCap to prevent unauthorized deposits.
     public fun deposit_yield(
         pool: &mut RewardPool,
         yield_coin: Coin<SUI>,
+        _cap: &PoolAdminCap,
         ctx: &mut TxContext,
     ) {
         let gross = coin::value(&yield_coin);
@@ -76,7 +75,6 @@ module surge::reward_pool {
         let pulse = (gross * PULSE_BP) / BP_DENOM;
         let surge = gross - fee - spark - pulse;
 
-        // Send fee directly to recipient
         if (fee > 0) {
             let fee_coin = coin::from_balance(balance::split(&mut bal, fee), ctx);
             transfer::public_transfer(fee_coin, FEE_RECIPIENT);
@@ -96,21 +94,40 @@ module surge::reward_pool {
         });
     }
 
-    public fun award_spark(pool: &mut RewardPool, amount_mist: u64, winner: address, ctx: &mut TxContext) {
+    /// FIX: PoolAdminCap required — only draw_manager (via crank) can award prizes
+    public fun award_spark(
+        pool: &mut RewardPool,
+        amount_mist: u64,
+        winner: address,
+        _cap: &PoolAdminCap,
+        ctx: &mut TxContext,
+    ) {
         assert!(balance::value(&pool.spark_pool) >= amount_mist, E_INSUFFICIENT_BALANCE);
         let prize = coin::from_balance(balance::split(&mut pool.spark_pool, amount_mist), ctx);
         event::emit(PrizeAwarded { pool: 0, winner, amount_mist });
         transfer::public_transfer(prize, winner);
     }
 
-    public fun award_pulse(pool: &mut RewardPool, amount_mist: u64, winner: address, ctx: &mut TxContext) {
+    public fun award_pulse(
+        pool: &mut RewardPool,
+        amount_mist: u64,
+        winner: address,
+        _cap: &PoolAdminCap,
+        ctx: &mut TxContext,
+    ) {
         assert!(balance::value(&pool.pulse_pool) >= amount_mist, E_INSUFFICIENT_BALANCE);
         let prize = coin::from_balance(balance::split(&mut pool.pulse_pool, amount_mist), ctx);
         event::emit(PrizeAwarded { pool: 1, winner, amount_mist });
         transfer::public_transfer(prize, winner);
     }
 
-    public fun award_surge(pool: &mut RewardPool, amount_mist: u64, winner: address, ctx: &mut TxContext) {
+    public fun award_surge(
+        pool: &mut RewardPool,
+        amount_mist: u64,
+        winner: address,
+        _cap: &PoolAdminCap,
+        ctx: &mut TxContext,
+    ) {
         assert!(balance::value(&pool.surge_pool) >= amount_mist, E_INSUFFICIENT_BALANCE);
         let prize = coin::from_balance(balance::split(&mut pool.surge_pool, amount_mist), ctx);
         event::emit(PrizeAwarded { pool: 2, winner, amount_mist });
@@ -120,7 +137,7 @@ module surge::reward_pool {
     public fun spark_balance(pool: &RewardPool): u64  { balance::value(&pool.spark_pool) }
     public fun pulse_balance(pool: &RewardPool): u64  { balance::value(&pool.pulse_pool) }
     public fun surge_balance(pool: &RewardPool): u64  { balance::value(&pool.surge_pool) }
-    public fun treasury_balance(pool: &RewardPool): u64 { 0 } // kept for compatibility
+    public fun treasury_balance(pool: &RewardPool): u64 { 0 }
 
     #[test_only]
     public fun init_for_testing(ctx: &mut TxContext) { init(ctx); }

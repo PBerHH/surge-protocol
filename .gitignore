@@ -1,0 +1,11 @@
+# Dependencies
+scripts/node_modules/
+frontend/node_modules/
+
+# Build artifacts (keep dist for deployment reference but not node_modules)
+frontend/dist/
+
+# Misc
+.DS_Store
+*.log
+Published.toml.save

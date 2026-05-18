@@ -1,6 +1,5 @@
-/// Surge V2 — Draw Manager
-/// Orchestrates Spark (daily), Pulse (weekly), Surge (monthly) draws.
-/// Uses Pyth Entropy for verifiable on-chain randomness.
+/// Surge V2 — Draw Manager (Security Fix)
+/// Fix: Replaced off-chain vrf_bytes with sui::random::Random → crank cannot predict winners
 module surge::draw_manager {
 
     use sui::object::{Self, UID, ID};
@@ -8,15 +7,16 @@ module surge::draw_manager {
     use sui::clock::{Self, Clock};
     use sui::transfer;
     use sui::event;
-    use surge::reward_pool::{Self, RewardPool};
+    use sui::random::{Self, Random, RandomGenerator};
+    use surge::reward_pool::{Self, RewardPool, PoolAdminCap};
 
     // ── Constants ──────────────────────────────────────────────────────────────
 
-    const MS_PER_DAY:   u64 = 86_400_000;
+    const MS_PER_6H:    u64 = 21_600_000;
     const MS_PER_WEEK:  u64 = 604_800_000;
-    const MS_PER_MONTH: u64 = 2_592_000_000; // 30 days
+    const MS_PER_MONTH: u64 = 2_592_000_000;
 
-    const SPARK_WINNERS:  u64 = 15;
+    const SPARK_WINNERS:  u64 = 3;
     const PULSE_WINNERS:  u64 = 4;
     const SURGE_WINNERS:  u64 = 1;
 
@@ -27,7 +27,6 @@ module surge::draw_manager {
 
     // ── Structs ────────────────────────────────────────────────────────────────
 
-    /// Shared state tracking next draw times and participant snapshots.
     public struct DrawState has key {
         id: UID,
         admin: address,
@@ -36,13 +35,10 @@ module surge::draw_manager {
         next_pulse_ms:  u64,
         next_surge_ms:  u64,
 
-        /// Flattened ticket arrays: each entry is a staker address.
-        /// Index = ticket number. Winner = tickets[vrf_output % len].
         spark_tickets:  vector<address>,
         pulse_tickets:  vector<address>,
         surge_tickets:  vector<address>,
 
-        /// Running draw counters for audit trail.
         spark_draw_count:  u64,
         pulse_draw_count:  u64,
         surge_draw_count:  u64,
@@ -53,9 +49,8 @@ module surge::draw_manager {
     // ── Events ─────────────────────────────────────────────────────────────────
 
     public struct DrawTriggered has copy, drop {
-        draw_type: u8, // 0=spark 1=pulse 2=surge
+        draw_type: u8,
         draw_index: u64,
-        vrf_seed: vector<u8>,
         winner_count: u64,
     }
 
@@ -72,7 +67,7 @@ module surge::draw_manager {
         let state = DrawState {
             id: object::new(ctx),
             admin,
-            next_spark_ms:  0,
+            next_spark_ms:  1747317600000,
             next_pulse_ms:  0,
             next_surge_ms:  0,
             spark_tickets:  vector[],
@@ -90,7 +85,6 @@ module surge::draw_manager {
 
     // ── Ticket Registration ────────────────────────────────────────────────────
 
-    /// Register tickets for a staker (called by crank after snapshot).
     entry fun register_spark_tickets(
         state: &mut DrawState,
         staker: address,
@@ -138,12 +132,12 @@ module surge::draw_manager {
 
     // ── Draw Execution ─────────────────────────────────────────────────────────
 
-    /// Trigger the Spark draw. Called by crank when time is due.
-    /// `vrf_bytes` = Pyth Entropy randomness bytes (32 bytes).
+    /// FIX: Uses sui::random::Random instead of vrf_bytes — on-chain verifiable, crank cannot predict
     entry fun trigger_spark(
         state: &mut DrawState,
         pool: &mut RewardPool,
-        vrf_bytes: vector<u8>,
+        pool_cap: &PoolAdminCap,
+        rng: &Random,
         clock: &Clock,
         _cap: &AdminCap,
         ctx: &mut TxContext,
@@ -155,35 +149,32 @@ module surge::draw_manager {
         assert!(total_tickets > 0, E_NO_PARTICIPANTS);
 
         let prize_per_winner = reward_pool::spark_balance(pool) / SPARK_WINNERS;
+        let mut gen = random::new_generator(rng, ctx);
         let mut winners_drawn: u64 = 0;
-        let mut seed = vrf_bytes;
 
         while (winners_drawn < SPARK_WINNERS) {
-            let idx = vrf_to_index(&seed, total_tickets);
+            let idx = random::generate_u64_in_range(&mut gen, 0, total_tickets - 1);
             let winner = *vector::borrow(&state.spark_tickets, idx);
-            reward_pool::award_spark(pool, prize_per_winner, winner, ctx);
-            // Rotate seed for next winner
-            seed = next_seed(seed, winners_drawn);
+            reward_pool::award_spark(pool, prize_per_winner, winner, pool_cap, ctx);
             winners_drawn = winners_drawn + 1;
         };
 
         state.spark_draw_count = state.spark_draw_count + 1;
-        state.next_spark_ms = now + MS_PER_DAY;
-        state.spark_tickets = vector[]; // clear for next round
+        state.next_spark_ms = now + MS_PER_6H;
+        state.spark_tickets = vector[];
 
         event::emit(DrawTriggered {
             draw_type: 0,
             draw_index: state.spark_draw_count,
-            vrf_seed: vrf_bytes,
             winner_count: SPARK_WINNERS,
         });
     }
 
-    /// Trigger the Pulse draw (weekly).
     entry fun trigger_pulse(
         state: &mut DrawState,
         pool: &mut RewardPool,
-        vrf_bytes: vector<u8>,
+        pool_cap: &PoolAdminCap,
+        rng: &Random,
         clock: &Clock,
         _cap: &AdminCap,
         ctx: &mut TxContext,
@@ -195,14 +186,13 @@ module surge::draw_manager {
         assert!(total_tickets > 0, E_NO_PARTICIPANTS);
 
         let prize_per_winner = reward_pool::pulse_balance(pool) / PULSE_WINNERS;
+        let mut gen = random::new_generator(rng, ctx);
         let mut winners_drawn: u64 = 0;
-        let mut seed = vrf_bytes;
 
         while (winners_drawn < PULSE_WINNERS) {
-            let idx = vrf_to_index(&seed, total_tickets);
+            let idx = random::generate_u64_in_range(&mut gen, 0, total_tickets - 1);
             let winner = *vector::borrow(&state.pulse_tickets, idx);
-            reward_pool::award_pulse(pool, prize_per_winner, winner, ctx);
-            seed = next_seed(seed, winners_drawn);
+            reward_pool::award_pulse(pool, prize_per_winner, winner, pool_cap, ctx);
             winners_drawn = winners_drawn + 1;
         };
 
@@ -213,16 +203,15 @@ module surge::draw_manager {
         event::emit(DrawTriggered {
             draw_type: 1,
             draw_index: state.pulse_draw_count,
-            vrf_seed: vrf_bytes,
             winner_count: PULSE_WINNERS,
         });
     }
 
-    /// Trigger the Surge jackpot draw (monthly).
     entry fun trigger_surge(
         state: &mut DrawState,
         pool: &mut RewardPool,
-        vrf_bytes: vector<u8>,
+        pool_cap: &PoolAdminCap,
+        rng: &Random,
         clock: &Clock,
         _cap: &AdminCap,
         ctx: &mut TxContext,
@@ -234,9 +223,10 @@ module surge::draw_manager {
         assert!(total_tickets > 0, E_NO_PARTICIPANTS);
 
         let jackpot = reward_pool::surge_balance(pool);
-        let idx = vrf_to_index(&vrf_bytes, total_tickets);
+        let mut gen = random::new_generator(rng, ctx);
+        let idx = random::generate_u64_in_range(&mut gen, 0, total_tickets - 1);
         let winner = *vector::borrow(&state.surge_tickets, idx);
-        reward_pool::award_surge(pool, jackpot, winner, ctx);
+        reward_pool::award_surge(pool, jackpot, winner, pool_cap, ctx);
 
         state.surge_draw_count = state.surge_draw_count + 1;
         state.next_surge_ms = now + MS_PER_MONTH;
@@ -245,30 +235,8 @@ module surge::draw_manager {
         event::emit(DrawTriggered {
             draw_type: 2,
             draw_index: state.surge_draw_count,
-            vrf_seed: vrf_bytes,
             winner_count: SURGE_WINNERS,
         });
-    }
-
-    // ── Internal Helpers ───────────────────────────────────────────────────────
-
-    /// Convert VRF bytes to an index in [0, total).
-    fun vrf_to_index(seed: &vector<u8>, total: u64): u64 {
-        // Take first 8 bytes as u64, mod total
-        let mut val: u64 = 0;
-        let mut i = 0;
-        while (i < 8 && i < vector::length(seed)) {
-            val = (val << 8) | (*vector::borrow(seed, i) as u64);
-            i = i + 1;
-        };
-        val % total
-    }
-
-    /// Derive next seed by appending the winner index.
-    fun next_seed(seed: vector<u8>, nonce: u64): vector<u8> {
-        let mut s = seed;
-        vector::push_back(&mut s, (nonce & 0xff as u8));
-        s
     }
 
     // ── Accessors ──────────────────────────────────────────────────────────────

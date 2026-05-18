@@ -4,33 +4,35 @@ const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
 const { Transaction } = require('@mysten/sui/transactions');
 const { Ed25519Keypair } = require('@mysten/sui/keypairs/ed25519');
 const { fromB64 } = require('@mysten/sui/utils');
-const { randomBytes } = require('crypto');
 const fs = require('fs');
 const os = require('os');
 
-const NETWORK        = process.env.NETWORK ?? 'mainnet';
-const PACKAGE_ID     = process.env.PACKAGE_ID ?? '';
-const DRAW_STATE     = process.env.DRAW_STATE ?? '';
-const REWARD_POOL    = process.env.REWARD_POOL ?? '';
-const VAULT          = process.env.VAULT ?? '';
-const ADMIN_CAP_DRAW = process.env.ADMIN_CAP_DRAW ?? '';
-const POLL_MS        = 60_000;
+const NETWORK          = process.env.NETWORK ?? 'mainnet';
+const PACKAGE_ID       = process.env.PACKAGE_ID ?? '';
+const DRAW_STATE       = process.env.DRAW_STATE ?? '';
+const REWARD_POOL      = process.env.REWARD_POOL ?? '';
+const VAULT            = process.env.VAULT ?? '';
+const ADMIN_CAP_DRAW   = process.env.ADMIN_CAP_DRAW ?? '';
+const POOL_ADMIN_CAP   = process.env.POOL_ADMIN_CAP ?? '';   // NEW: PoolAdminCap
+const VAULT_ADMIN_CAP  = process.env.VAULT_ADMIN_CAP ?? '';  // NEW: VaultAdminCap
 
-let DYNAMIC_APY = 0.01503; // Triton One APY // fallback 1.5%
-async function fetchValidatorApy(client) {
-  try {
-    const resp = await fetch('https://fullnode.mainnet.sui.io', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({jsonrpc:'2.0',id:1,method:'suix_getValidatorApys',params:[]}) });
-    const data = await resp.json();
-    const v = data?.result?.apys?.find(x => x.address === '0xa608b66f7ae2201286f7dd07a8b073cde7955b35056629636a6c9b3f5275f384');
-    if (v?.apy) { DYNAMIC_APY = v.apy; console.log(`  📈 Validator APY: ${(v.apy*100).toFixed(3)}%`); }
-    else { console.log('  ⚠️ Validator not found, using fallback'); }
-  } catch(e) { console.log('  ⚠️ APY fetch failed, using fallback'); }
-}
-const MIN_YIELD_MIST = 1_000_000n;
+const POLL_MS          = 60_000;
+const APY              = 0.05;
+const YIELD_PER_TICK   = APY / 365 / 24 / 60;
+const MIN_YIELD_MIST   = 100n;
+
+// Sui shared Random object (fixed address on all networks)
+const SUI_RANDOM = '0x0000000000000000000000000000000000000000000000000000000000000008';
 
 function loadKeypair() {
-  const keystore = process.env.KEYSTORE ? JSON.parse(process.env.KEYSTORE) : JSON.parse(fs.readFileSync(`${os.homedir()}/.sui/sui_config/sui.keystore`, 'utf-8'));
-  const raw = fromB64(keystore[1]);
+  if (process.env.PRIVATE_KEY_B64) {
+    const raw = fromB64(process.env.PRIVATE_KEY_B64);
+    const secret = raw.length === 33 ? raw.slice(1) : raw;
+    return Ed25519Keypair.fromSecretKey(secret);
+  }
+  const keystorePath = `${os.homedir()}/.sui/sui_config/sui.keystore`;
+  const keystore = JSON.parse(fs.readFileSync(keystorePath, 'utf-8'));
+  const raw = fromB64(keystore[0]);
   const secret = raw.length === 33 ? raw.slice(1) : raw;
   return Ed25519Keypair.fromSecretKey(secret);
 }
@@ -49,10 +51,10 @@ async function fetchVault(client) {
   const obj = await client.getObject({ id: VAULT, options: { showContent: true } });
   if (obj.data?.content?.dataType !== 'moveObject') return null;
   const f = obj.data.content.fields;
-  // total_staked is tracked as u64 in the vault
-  const totalStaked = BigInt(f.total_staked ?? 0);
-  const pendingYield = BigInt(f.pending_yield ?? 0);
-  return { totalStaked, pendingYield };
+  return {
+    totalStaked: BigInt(f.total_staked ?? 0),
+    pendingYield: BigInt(f.pending_yield ?? 0),
+  };
 }
 
 async function fetchDrawState(client) {
@@ -60,12 +62,9 @@ async function fetchDrawState(client) {
   if (obj.data?.content?.dataType !== 'moveObject') throw new Error('DrawState not found');
   const f = obj.data.content.fields;
   return {
-    nextSparkMs:   BigInt(f.next_spark_ms ?? 0),
-    nextPulseMs:   BigInt(f.next_pulse_ms ?? 0),
-    nextSurgeMs:   BigInt(f.next_surge_ms ?? 0),
-    sparkTickets:  f.spark_tickets ?? [],
-    pulseTickets:  f.pulse_tickets ?? [],
-    surgeTickets:  f.surge_tickets ?? [],
+    nextSparkMs: BigInt(f.next_spark_ms ?? 0),
+    nextPulseMs: BigInt(f.next_pulse_ms ?? 0),
+    nextSurgeMs: BigInt(f.next_surge_ms ?? 0),
   };
 }
 
@@ -74,13 +73,12 @@ async function fetchPoolBalances(client) {
   if (obj.data?.content?.dataType !== 'moveObject') return null;
   const f = obj.data.content.fields;
   return {
-    spark: BigInt(f.spark_pool ?? 0),
-    pulse: BigInt(f.pulse_pool ?? 0),
-    surge: BigInt(f.surge_pool ?? 0),
+    spark: BigInt(f.spark_pool?.fields?.value ?? f.spark_pool ?? 0),
+    pulse: BigInt(f.pulse_pool?.fields?.value ?? f.pulse_pool ?? 0),
+    surge: BigInt(f.surge_pool?.fields?.value ?? f.surge_pool ?? 0),
   };
 }
 
-// Get all StakeReceipts from the vault to build ticket list
 async function fetchStakers(client) {
   try {
     const events = await client.queryEvents({
@@ -107,38 +105,58 @@ async function fetchStakers(client) {
 
 async function simulateYield(client, keypair, totalStaked) {
   if (totalStaked === 0n) { console.log('  💤 No stakers — skipping yield'); return; }
-  const yieldMist = BigInt(Math.floor(Number(totalStaked) * DYNAMIC_APY / 365 / 24 / 60));
+  const yieldMist = BigInt(Math.floor(Number(totalStaked) * YIELD_PER_TICK));
   if (yieldMist < MIN_YIELD_MIST) { console.log(`  💤 Yield too small (${yieldMist} MIST) — skipping`); return; }
   console.log(`  🌱 Injecting yield: ${(Number(yieldMist)/1e9).toFixed(6)} SUI`);
   try {
     const tx = new Transaction();
     tx.setGasPrice(1000);
     const [c] = tx.splitCoins(tx.gas, [yieldMist]);
-    tx.moveCall({ target: `${PACKAGE_ID}::stake_vault::add_yield`, arguments: [tx.object(VAULT), c] });
+    tx.moveCall({
+      target: `${PACKAGE_ID}::stake_vault::add_yield`,
+      arguments: [tx.object(VAULT), c],
+    });
     const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
     if (r.effects?.status?.status === 'success') console.log(`  ✅ Yield injected — tx: ${r.digest}`);
     else console.error('  ❌ Yield failed:', r.effects?.status?.error);
   } catch (e) { console.error('  ❌ Yield error:', e.message); }
 }
 
+// FIX: harvest_yield now requires VaultAdminCap
+// FIX: deposit_yield now requires PoolAdminCap
 async function harvestYield(client, keypair, pendingYield) {
   if (pendingYield === 0n) return;
   console.log(`  🌾 Harvesting ${(Number(pendingYield)/1e9).toFixed(6)} SUI into RewardPool...`);
   try {
     const tx = new Transaction();
     tx.setGasPrice(1000);
-    const harvested = tx.moveCall({ target: `${PACKAGE_ID}::stake_vault::harvest_yield`, arguments: [tx.object(VAULT)] });
-    tx.moveCall({ target: `${PACKAGE_ID}::reward_pool::deposit_yield`, arguments: [tx.object(REWARD_POOL), harvested] });
+    const harvested = tx.moveCall({
+      target: `${PACKAGE_ID}::stake_vault::harvest_yield`,
+      arguments: [
+        tx.object(VAULT),
+        tx.object(VAULT_ADMIN_CAP), // FIX: VaultAdminCap required
+      ],
+    });
+    tx.moveCall({
+      target: `${PACKAGE_ID}::reward_pool::deposit_yield`,
+      arguments: [
+        tx.object(REWARD_POOL),
+        harvested,
+        tx.object(POOL_ADMIN_CAP), // FIX: PoolAdminCap required
+      ],
+    });
     const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
     if (r.effects?.status?.status === 'success') console.log(`  ✅ Harvest complete — tx: ${r.digest}`);
     else console.error('  ❌ Harvest failed:', r.effects?.status?.error);
   } catch (e) { console.error('  ❌ Harvest error:', e.message); }
 }
 
+// FIX: trigger_* no longer takes vrf_bytes — uses sui::random::Random (@0x8)
+// FIX: trigger_* now requires PoolAdminCap
 async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   const names = ['Spark', 'Pulse', 'Surge'];
-  const registerFn = [`register_spark_tickets`, `register_pulse_tickets`, `register_surge_tickets`];
-  const triggerFn  = [`trigger_spark`, `trigger_pulse`, `trigger_surge`];
+  const registerFn = ['register_spark_tickets', 'register_pulse_tickets', 'register_surge_tickets'];
+  const triggerFn  = ['trigger_spark', 'trigger_pulse', 'trigger_surge'];
   const name = names[drawType];
 
   if (Object.keys(stakers).length === 0) {
@@ -155,7 +173,17 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
     // Register tickets for each staker
     for (const [addr, amtMist] of Object.entries(stakers)) {
       const suiAmt = Number(amtMist) / 1e9;
-      const tickets = Math.min(Math.floor(suiAmt), 500); // spark: 1 ticket per SUI, max 500
+      let tickets;
+      if (drawType === 0) {
+        tickets = Math.min(Math.floor(suiAmt), 500);
+      } else if (drawType === 1) {
+        tickets = suiAmt < 50 ? 0
+          : suiAmt <= 1000 ? Math.floor(suiAmt)
+          : Math.floor(1000 + Math.sqrt(suiAmt - 1000));
+      } else {
+        tickets = suiAmt < 200 ? 0 : Math.floor(suiAmt);
+      }
+
       if (tickets > 0) {
         tx.moveCall({
           target: `${PACKAGE_ID}::draw_manager::${registerFn[drawType]}`,
@@ -169,24 +197,28 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
       }
     }
 
-    // VRF = random 32 bytes
-    const vrf = Array.from(randomBytes(32));
-
-    // Trigger draw
+    // FIX: trigger uses Random @0x8 + PoolAdminCap instead of vrf_bytes
     tx.moveCall({
       target: `${PACKAGE_ID}::draw_manager::${triggerFn[drawType]}`,
       arguments: [
         tx.object(DRAW_STATE),
         tx.object(REWARD_POOL),
-        tx.pure.vector('u8', vrf),
-        tx.object('0x6'), // clock
+        tx.object(POOL_ADMIN_CAP), // FIX: PoolAdminCap
+        tx.object(SUI_RANDOM),     // FIX: on-chain Random (@0x8)
+        tx.object('0x6'),          // Clock
         tx.object(ADMIN_CAP_DRAW),
       ],
     });
 
-    const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
+    const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true, showEvents: true } });
     if (r.effects?.status?.status === 'success') {
       console.log(`  ✅ ${name} draw complete — tx: ${r.digest}`);
+      for (const ev of r.events ?? []) {
+        if (ev.type?.includes('PrizeAwarded')) {
+          const f = ev.parsedJson;
+          console.log(`  🏆 Winner: ${f?.winner} → ${(Number(f?.amount_mist ?? 0)/1e9).toFixed(4)} SUI`);
+        }
+      }
     } else {
       console.error(`  ❌ ${name} draw failed:`, r.effects?.status?.error);
     }
@@ -205,7 +237,6 @@ async function tick(client, keypair) {
   const fmt = n => (Number(n)/1e9).toFixed(4);
   console.log(`  🏦 Vault — staked: ${fmt(vault.totalStaked)} SUI · pending yield: ${fmt(vault.pendingYield)} SUI`);
 
-  await fetchValidatorApy(client);
   await simulateYield(client, keypair, vault.totalStaked);
 
   const vaultAfter = await fetchVault(client);
@@ -229,7 +260,6 @@ async function tick(client, keypair) {
     if (now >= c.next) {
       if (c.bal && c.bal > 0n) {
         await registerAndDraw(client, keypair, c.type, stakers, c.bal);
-        // Wait 3s between draws so object versions settle
         await new Promise(r => setTimeout(r, 3000));
       } else {
         console.log(`  ${c.icon} ${c.name}: due but pool empty — skipping`);
@@ -242,12 +272,14 @@ async function tick(client, keypair) {
 }
 
 async function main() {
-  console.log('🌊 Surge Crank v3 — starting up');
+  console.log('🌊 Surge Crank v4 — starting up');
   console.log(`   Network:  ${NETWORK}`);
   console.log(`   Package:  ${PACKAGE_ID.slice(0,10)}...`);
 
-  if (!PACKAGE_ID || !DRAW_STATE || !REWARD_POOL || !VAULT || !ADMIN_CAP_DRAW) {
-    console.error('❌ Missing env vars — check .env'); process.exit(1);
+  if (!PACKAGE_ID || !DRAW_STATE || !REWARD_POOL || !VAULT || !ADMIN_CAP_DRAW || !POOL_ADMIN_CAP || !VAULT_ADMIN_CAP) {
+    console.error('❌ Missing env vars — check .env');
+    console.error('   Required: PACKAGE_ID, DRAW_STATE, REWARD_POOL, VAULT, ADMIN_CAP_DRAW, POOL_ADMIN_CAP, VAULT_ADMIN_CAP');
+    process.exit(1);
   }
 
   const client  = new SuiClient({ url: getFullnodeUrl(NETWORK) });

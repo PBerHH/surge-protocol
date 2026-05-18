@@ -1,12 +1,13 @@
 [package]
 name = "surge"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024.beta"
+upgrade-policy = "incompatible"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
 SuiSystem = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-system", rev = "framework/mainnet" }
 
 [addresses]
-surge = "0x0"
+surge = "0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3"
 sui_system = "0x3"
