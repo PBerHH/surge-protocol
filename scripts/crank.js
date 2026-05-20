@@ -13,13 +13,10 @@ const DRAW_STATE       = process.env.DRAW_STATE ?? '';
 const REWARD_POOL      = process.env.REWARD_POOL ?? '';
 const VAULT            = process.env.VAULT ?? '';
 const ADMIN_CAP_DRAW   = process.env.ADMIN_CAP_DRAW ?? '';
-const POOL_ADMIN_CAP   = process.env.POOL_ADMIN_CAP ?? '';   // NEW: PoolAdminCap
-const VAULT_ADMIN_CAP  = process.env.VAULT_ADMIN_CAP ?? '';  // NEW: VaultAdminCap
+const POOL_ADMIN_CAP   = process.env.POOL_ADMIN_CAP ?? '';
+const VAULT_ADMIN_CAP  = process.env.VAULT_ADMIN_CAP ?? '';
 
-const POLL_MS          = 60_000;
-const APY              = 0.05;
-const YIELD_PER_TICK   = APY / 365 / 24 / 60;
-const MIN_YIELD_MIST   = 100n;
+const POLL_MS          = 10_800_000;  // 3 hours
 
 // Sui shared Random object (fixed address on all networks)
 const SUI_RANDOM = '0x0000000000000000000000000000000000000000000000000000000000000008';
@@ -103,29 +100,7 @@ async function fetchStakers(client) {
   }
 }
 
-async function simulateYield(client, keypair, totalStaked) {
-  if (totalStaked === 0n) { console.log('  💤 No stakers — skipping yield'); return; }
-  const yieldMist = BigInt(Math.floor(Number(totalStaked) * YIELD_PER_TICK));
-  if (yieldMist < MIN_YIELD_MIST) { console.log(`  💤 Yield too small (${yieldMist} MIST) — skipping`); return; }
-  console.log(`  🌱 Injecting yield: ${(Number(yieldMist)/1e9).toFixed(6)} SUI`);
-  try {
-    const tx = new Transaction();
-    tx.setGasPrice(1000);
-    const [c] = tx.splitCoins(tx.gas, [yieldMist]);
-    tx.moveCall({
-      target: `${PACKAGE_ID}::stake_vault::add_yield`,
-      arguments: [tx.object(VAULT), c],
-    });
-    const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
-    if (r.effects?.status?.status === 'success') console.log(`  ✅ Yield injected — tx: ${r.digest}`);
-    else console.error('  ❌ Yield failed:', r.effects?.status?.error);
-  } catch (e) { console.error('  ❌ Yield error:', e.message); }
-}
-
-// FIX: harvest_yield now requires VaultAdminCap
-// FIX: deposit_yield now requires PoolAdminCap
 async function harvestYield(client, keypair, pendingYield) {
-  if (pendingYield === 0n) return;
   console.log(`  🌾 Harvesting ${(Number(pendingYield)/1e9).toFixed(6)} SUI into RewardPool...`);
   try {
     const tx = new Transaction();
@@ -134,7 +109,7 @@ async function harvestYield(client, keypair, pendingYield) {
       target: `${PACKAGE_ID}::stake_vault::harvest_yield`,
       arguments: [
         tx.object(VAULT),
-        tx.object(VAULT_ADMIN_CAP), // FIX: VaultAdminCap required
+        tx.object(VAULT_ADMIN_CAP),
       ],
     });
     tx.moveCall({
@@ -142,7 +117,7 @@ async function harvestYield(client, keypair, pendingYield) {
       arguments: [
         tx.object(REWARD_POOL),
         harvested,
-        tx.object(POOL_ADMIN_CAP), // FIX: PoolAdminCap required
+        tx.object(POOL_ADMIN_CAP),
       ],
     });
     const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
@@ -151,8 +126,6 @@ async function harvestYield(client, keypair, pendingYield) {
   } catch (e) { console.error('  ❌ Harvest error:', e.message); }
 }
 
-// FIX: trigger_* no longer takes vrf_bytes — uses sui::random::Random (@0x8)
-// FIX: trigger_* now requires PoolAdminCap
 async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   const names = ['Spark', 'Pulse', 'Surge'];
   const registerFn = ['register_spark_tickets', 'register_pulse_tickets', 'register_surge_tickets'];
@@ -170,7 +143,6 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
     const tx = new Transaction();
     tx.setGasPrice(1000);
 
-    // Register tickets for each staker
     for (const [addr, amtMist] of Object.entries(stakers)) {
       const suiAmt = Number(amtMist) / 1e9;
       let tickets;
@@ -197,15 +169,14 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
       }
     }
 
-    // FIX: trigger uses Random @0x8 + PoolAdminCap instead of vrf_bytes
     tx.moveCall({
       target: `${PACKAGE_ID}::draw_manager::${triggerFn[drawType]}`,
       arguments: [
         tx.object(DRAW_STATE),
         tx.object(REWARD_POOL),
-        tx.object(POOL_ADMIN_CAP), // FIX: PoolAdminCap
-        tx.object(SUI_RANDOM),     // FIX: on-chain Random (@0x8)
-        tx.object('0x6'),          // Clock
+        tx.object(POOL_ADMIN_CAP),
+        tx.object(SUI_RANDOM),
+        tx.object('0x6'),
         tx.object(ADMIN_CAP_DRAW),
       ],
     });
@@ -237,10 +208,10 @@ async function tick(client, keypair) {
   const fmt = n => (Number(n)/1e9).toFixed(4);
   console.log(`  🏦 Vault — staked: ${fmt(vault.totalStaked)} SUI · pending yield: ${fmt(vault.pendingYield)} SUI`);
 
-  await simulateYield(client, keypair, vault.totalStaked);
-
-  const vaultAfter = await fetchVault(client);
-  if (vaultAfter?.pendingYield > 0n) await harvestYield(client, keypair, vaultAfter.pendingYield);
+  // Harvest immediately if there's any yield
+  if (vault.pendingYield > 0n) {
+    await harvestYield(client, keypair, vault.pendingYield);
+  }
 
   const balances = await fetchPoolBalances(client);
   if (balances) {
@@ -272,9 +243,10 @@ async function tick(client, keypair) {
 }
 
 async function main() {
-  console.log('🌊 Surge Crank v4 — starting up');
+  console.log('🌊 Surge Crank v5 — Production');
   console.log(`   Network:  ${NETWORK}`);
   console.log(`   Package:  ${PACKAGE_ID.slice(0,10)}...`);
+  console.log(`   Interval: ${POLL_MS/1000/60} minutes (harvest after each potential draw)`);
 
   if (!PACKAGE_ID || !DRAW_STATE || !REWARD_POOL || !VAULT || !ADMIN_CAP_DRAW || !POOL_ADMIN_CAP || !VAULT_ADMIN_CAP) {
     console.error('❌ Missing env vars — check .env');
