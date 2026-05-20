@@ -340,6 +340,35 @@ export default function App() {
     } catch (e) { setLegacyStatus({ type: "error", msg: e.message }); }
   }
 
+
+  async function handleMigrate(receiptId, pkg, vault) {
+    setLegacyStatus({ type: "pending", msg: "Migrating to new contract..." });
+    try {
+      const tx = new Transaction();
+      tx.setGasPrice(1000);
+      
+      // Call migrate_from_legacy on the NEW contract
+      // It will: withdraw from old vault, deposit to new vault, preserve loyalty timestamp
+      const migrateCall = tx.moveCall({
+        target: `${PACKAGE}::stake_vault::migrate_from_legacy`,
+        arguments: [
+          tx.object(VAULT),           // new vault
+          tx.object(vault),           // old vault
+          tx.object(receiptId),       // old receipt
+          tx.object("0x6")            // clock
+        ]
+      });
+      
+      signAndExecute({ transaction: tx }, {
+        onSuccess: (r) => { 
+          setLegacyStatus({ type: "success", msg: `Migrated! Tx: ${r.digest.slice(0,16)}...` }); 
+          setTimeout(() => { fetchLegacyReceipts(); fetchVaultData(); }, 3000); 
+        },
+        onError: (e) => setLegacyStatus({ type: "error", msg: e.message }),
+      });
+    } catch (e) { setLegacyStatus({ type: "error", msg: e.message }); }
+  }
+
   function handleShare() {
     const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_staked ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surge-protocol-chi.vercel.app`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
@@ -508,18 +537,26 @@ export default function App() {
               <div className="panel-title" style={{ color: "#F5C842" }}>⚠️ Legacy Stakes (old contract)</div>
               <p style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginBottom: "1rem" }}>These stakes are from a previous contract version. Withdraw to recover your SUI.</p>
               {legacyStatus && <div className={`tx-status ${legacyStatus.type}`} style={{ marginBottom: "1rem" }}>{legacyStatus.msg}</div>}
-              {legacyReceipts.map((r, i) => (
-                <div className="position-row" key={i}>
-                  <div>
-                    <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
-                    <div className="pos-status">{r.unlock_ts_ms ? "⏳ Ready to withdraw" : "🔒 Needs unstake request"}</div>
+              {legacyReceipts.map((r, i) => {
+                const canMigrate = !r.unlock_ts_ms && r.deposit_ts_ms; // still staked
+                const isReady = r.unlock_ts_ms && Date.now() >= parseInt(r.unlock_ts_ms);
+                return (
+                  <div className="position-row" key={i}>
+                    <div>
+                      <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
+                      <div className="pos-status">{isReady ? "⏰ Ready to withdraw" : canMigrate ? "🔄 Can migrate seamlessly" : "⏳ Unstaking..."}</div>
+                    </div>
+                    {canMigrate ? (
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button className="unstake-btn" style={{ background: "rgba(198,127,232,0.15)", color: "#C67FE8", borderColor: "rgba(198,127,232,0.3)" }} onClick={() => handleMigrate(r.objectId, r.legacyPkg, r.legacyVault)}>Migrate</button>
+                        <button className="unstake-btn" style={{ background: "rgba(245,200,66,0.05)", color: "rgba(245,200,66,0.6)", borderColor: "rgba(245,200,66,0.2)", fontSize: "0.8rem" }} onClick={() => handleLegacyRequestUnstake(r.objectId, r.legacyPkg)}>Unstake</button>
+                      </div>
+                    ) : isReady ? (
+                      <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }} onClick={() => handleLegacyWithdraw(r.objectId, r.legacyPkg, r.legacyVault)}>Withdraw</button>
+                    ) : null}
                   </div>
-                  {!r.unlock_ts_ms
-                    ? <button className="unstake-btn" style={{ background: "rgba(245,200,66,0.15)", color: "#F5C842", borderColor: "rgba(245,200,66,0.3)" }} onClick={() => handleLegacyRequestUnstake(r.objectId, r.legacyPkg)}>Request Unstake</button>
-                    : <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }} onClick={() => handleLegacyWithdraw(r.objectId, r.legacyPkg, r.legacyVault)}>Withdraw</button>
-                  }
-                </div>
-              ))}
+                );
+              })}
             </section>
           )}
         </>}
