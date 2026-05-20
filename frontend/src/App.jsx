@@ -3,10 +3,10 @@ import { ConnectButton, useCurrentAccount, useSuiClient, useSignAndExecuteTransa
 import { Transaction } from "@mysten/sui/transactions";
 
 // ── Contract Config (V3 — Security Fixed) ───────────────────────────────────
-const PACKAGE     = "0x53a50af7d0aeb7190f5b06031b33dc3fb68859c00a767fc6683e6d8c406e2be0";
-const VAULT       = "0x64df43a049c9b24720e9aaa8939072907dda5cca69a7e557424b541ad16071e5";
-const DRAW_STATE  = "0x682bfc68b99363f2f6c970f1961eac065fcceb31b6a1090e1ddbd5e224ea88f8";
-const REWARD_POOL = "0xb8bb04a50edfb46435e40b84d1583e107f3fd02f7f9fde22b88b8bf53394a9d9";
+const PACKAGE     = "0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3";
+const VAULT       = "0x4bca5b44fcbb3cf79f3586c3ff4e4d3494975f1d8434de067a9a95b792150992";
+const DRAW_STATE  = "0xee9f68a29ab16442600a9e12426431b240aed97cdf5108f44d8325401cc25fb0";
+const REWARD_POOL = "0xacf68b636a55c96a8269ab0b66d735a7bbfadf058821cc17f97bc32d49d6968f";
 
 // ── Legacy Contracts ─────────────────────────────────────────────────────────
 const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
@@ -15,6 +15,10 @@ const LEGACY2_PACKAGE = "0x51ce7917adc5b9d7e7faa5988dfbbc1e2abbac5ae14cb38834f23
 const LEGACY2_VAULT   = "0x0430bf6c920033e5df27a371071a2f54844da65a103d08e35fb316eaa7134db9";
 const LEGACY3_PACKAGE = "0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50";
 const LEGACY3_VAULT   = "0x5cd4c73e20d876b1105fa49049e1ee903e9eac382867ce1d597719c5877e6a26";
+const LEGACY4_PACKAGE = "0x53a50af7d0aeb7190f5b06031b33dc3fb68859c00a767fc6683e6d8c406e2be0";
+const LEGACY4_VAULT   = "0x64df43a049c9b24720e9aaa8939072907dda5cca69a7e557424b541ad16071e5";
+const LEGACY5_PACKAGE = "0x9b9f9e13070024a61b19699f1f5bcf92b4eaff0c3498c07113dde0cfb137aeef";
+const LEGACY5_VAULT   = "0x0a1d78d1e0084ddcc00b7b64de0703d6ed79ab6944e1bf27f38399cc979cb506";
 
 function fmt(mist, dec = 3) { return (Number(BigInt(mist ?? 0)) / 1e9).toFixed(dec); }
 function fmtSui(mist) {
@@ -211,13 +215,15 @@ export default function App() {
   const fetchLegacyReceipts = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const [o1, o2, o3] = await Promise.all([
+      const [o1, o2, o3, o4, o5] = await Promise.all([
         client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
         client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY2_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
         client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY3_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
+        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY4_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
+        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY5_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
       ]);
       const map = (objs, pkg, vault) => objs.data.map(o => o.data?.content?.fields && { ...o.data.content.fields, objectId: o.data.objectId, legacyPkg: pkg, legacyVault: vault }).filter(Boolean);
-      setLegacyReceipts([...map(o1, LEGACY_PACKAGE, LEGACY_VAULT), ...map(o2, LEGACY2_PACKAGE, LEGACY2_VAULT), ...map(o3, LEGACY3_PACKAGE, LEGACY3_VAULT)]);
+      setLegacyReceipts([...map(o1, LEGACY_PACKAGE, LEGACY_VAULT), ...map(o2, LEGACY2_PACKAGE, LEGACY2_VAULT), ...map(o3, LEGACY3_PACKAGE, LEGACY3_VAULT), ...map(o4, LEGACY4_PACKAGE, LEGACY4_VAULT), ...map(o5, LEGACY5_PACKAGE, LEGACY5_VAULT)]);
     } catch (e) { console.error(e); }
   }, [account, client]);
 
