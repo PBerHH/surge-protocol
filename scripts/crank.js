@@ -100,11 +100,26 @@ async function fetchStakers(client) {
   }
 }
 
+// Protocol Fees (in basis points, 100 = 1%)
+const CRANK_FEE_BPS = 100n;   // 1% to crank wallet (operations)
+const OWNER_FEE_BPS = 100n;   // 1% to owner wallet (revenue)
+const OWNER_ADDRESS = '0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95';
+
 async function harvestYield(client, keypair, pendingYield) {
-  console.log(`  🌾 Harvesting ${(Number(pendingYield)/1e9).toFixed(6)} SUI into RewardPool...`);
+  const crankFee = (pendingYield * CRANK_FEE_BPS) / 10000n;
+  const ownerFee = (pendingYield * OWNER_FEE_BPS) / 10000n;
+  const toPool = pendingYield - crankFee - ownerFee;
+  
+  console.log(`  🌾 Harvesting ${(Number(pendingYield)/1e9).toFixed(6)} SUI`);
+  console.log(`     → Pool: ${(Number(toPool)/1e9).toFixed(6)} SUI (98%)`);
+  console.log(`     → Crank: ${(Number(crankFee)/1e9).toFixed(6)} SUI (1%)`);
+  console.log(`     → Owner: ${(Number(ownerFee)/1e9).toFixed(6)} SUI (1%)`);
+  
   try {
     const tx = new Transaction();
     tx.setGasPrice(1000);
+    
+    // 1. Harvest from vault → returns Coin<SUI>
     const harvested = tx.moveCall({
       target: `${PACKAGE_ID}::stake_vault::harvest_yield`,
       arguments: [
@@ -112,6 +127,19 @@ async function harvestYield(client, keypair, pendingYield) {
         tx.object(VAULT_ADMIN_CAP),
       ],
     });
+    
+    // 2. Split: [crank_fee, owner_fee] from harvested coin
+    // Only split if amounts > 0 (Sui doesn't allow 0 splits)
+    if (crankFee > 0n && ownerFee > 0n) {
+      const [crankCoin, ownerCoin] = tx.splitCoins(harvested, [crankFee, ownerFee]);
+      tx.transferObjects([crankCoin], keypair.toSuiAddress());
+      tx.transferObjects([ownerCoin], OWNER_ADDRESS);
+    } else if (crankFee > 0n) {
+      const [crankCoin] = tx.splitCoins(harvested, [crankFee]);
+      tx.transferObjects([crankCoin], keypair.toSuiAddress());
+    }
+    
+    // 3. Deposit remainder to pool
     tx.moveCall({
       target: `${PACKAGE_ID}::reward_pool::deposit_yield`,
       arguments: [
@@ -120,6 +148,7 @@ async function harvestYield(client, keypair, pendingYield) {
         tx.object(POOL_ADMIN_CAP),
       ],
     });
+    
     const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
     if (r.effects?.status?.status === 'success') console.log(`  ✅ Harvest complete — tx: ${r.digest}`);
     else console.error('  ❌ Harvest failed:', r.effects?.status?.error);
