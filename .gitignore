@@ -9,3 +9,5 @@ frontend/dist/
 .DS_Store
 *.log
 Published.toml.save
+scripts/.env
+.env
