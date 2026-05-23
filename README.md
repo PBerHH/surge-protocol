@@ -159,3 +159,16 @@ node crank.js
 ## Built for Sui Overflow 2026
 
 Surge Protocol was built for the Sui Overflow 2026 hackathon.
+
+
+## Fee Structure
+
+Surge Protocol operates with a transparent 2% fee on staking yield:
+
+- **98% → Prize Pools** - Distributed to winners via Spark, Pulse, and Surge draws
+- **1% → Operations** - Covers crank automation, infrastructure, and gas costs
+- **1% → Marketing Fund** - Used for partnerships, campaigns, and community growth
+
+**Marketing Wallet (transparent):**0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95
+All fees are automatically split on-chain during yield harvests. You can verify transactions on [Sui Explorer](https://suiscan.xyz).
+

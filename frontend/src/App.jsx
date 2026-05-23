@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { fetchUserPoints, fetchStats } from "./supabase";
 import { ConnectButton, useCurrentAccount, useSuiClient, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 
@@ -148,6 +149,8 @@ export default function App() {
   const [lastWinners, setLastWinners] = useState([]);
   const [myWinnings, setMyWinnings] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [userPoints, setUserPoints] = useState(null);
+  const [globalStats, setGlobalStats] = useState(null);
   const [openFaq, setOpenFaq] = useState(null);
   const [activeTab, setActiveTab] = useState("stake");
   const [loyaltyData, setLoyaltyData] = useState(null);
@@ -182,6 +185,20 @@ export default function App() {
   }, [client]);
 
   useEffect(() => { fetchLastWinners(); const t = setInterval(fetchLastWinners, 15000); return () => clearInterval(t); }, [fetchLastWinners]);
+
+  useEffect(() => {
+    const loadPointsData = async () => {
+      const stats = await fetchStats();
+      setGlobalStats(stats);
+      if (account?.address) {
+        const points = await fetchUserPoints(account.address);
+        setUserPoints(points);
+      }
+    };
+    loadPointsData();
+    const t = setInterval(loadPointsData, 30000);
+    return () => clearInterval(t);
+  }, [account?.address]);
 
   const fetchReceipts = useCallback(async () => {
     if (!account?.address) return;
@@ -396,7 +413,6 @@ export default function App() {
     { id: "winners", label: `Winners${lastWinners.length > 0 ? ` (${lastWinners.length})` : ""}` },
     { id: "leaderboard", label: "Leaderboard" },
     { id: "mywinnings", label: `My Wins${myWinnings.length > 0 ? ` (${myWinnings.length})` : ""}` },
-    { id: "calculator", label: "APY Calc" },
   ];
 
   return (
@@ -433,9 +449,9 @@ export default function App() {
           </div>
           {account && myStakeSui > 0 && <>
             <div style={{ width: 1, background: "rgba(255,255,255,0.06)" }} />
-            <div style={{ flex: 1, padding: "1.5rem 1.75rem", background: "rgba(58,191,170,0.05)", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <div style={{ flex: 1, padding: "1.5rem 1.75rem", background: "rgba(58,191,170,0.05)", display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: 0 }}>
               <div style={{ fontSize: "0.7rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(58,191,170,0.6)", fontWeight: 600 }}>My Stake</div>
-              <div style={{ fontSize: "2rem", fontWeight: 700, color: "#3ABFAA", letterSpacing: "-0.02em", lineHeight: 1 }}>{myStakeSui.toFixed(3)}<span style={{ fontSize: "0.9rem", fontWeight: 400, color: "rgba(58,191,170,0.5)", marginLeft: 6 }}>SUI</span></div>
+              <div style={{ fontSize: "1.75rem", fontWeight: 700, color: "#3ABFAA", letterSpacing: "-0.02em", lineHeight: 1, whiteSpace: "nowrap" }}>{myStakeSui.toFixed(2)}<span style={{ fontSize: "0.8rem", fontWeight: 400, color: "rgba(58,191,170,0.5)", marginLeft: 6 }}>SUI</span></div>
               <div style={{ fontSize: "0.75rem", color: "rgba(58,191,170,0.4)" }}>{suiPrice ? `≈ $${(myStakeSui * suiPrice).toFixed(2)} USD` : "Loading..."}</div>
             </div>
           </>}
@@ -443,6 +459,22 @@ export default function App() {
       </header>
 
       <main className="main">
+        {globalStats && globalStats.pioneer_slots_left > 0 && (
+          <div className="pioneer-banner" style={{ background: "linear-gradient(135deg, rgba(198,127,232,0.15), rgba(245,200,66,0.15))", border: "1px solid rgba(198,127,232,0.3)", borderRadius: 12, padding: "1rem 1.5rem", marginBottom: "1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
+            <div>
+              <div style={{ fontSize: "0.85rem", color: "#C67FE8", fontWeight: 700, marginBottom: 4 }}>
+                🏆 PIONEER PHASE — {globalStats.pioneer_slots_left}/1000 SLOTS LEFT
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.6)" }}>
+                First 1000 stakers earn 2x points forever. First 100 earn 3x.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "1.5rem", fontSize: "0.75rem", fontFamily: "DM Mono, monospace" }}>
+              <div><span style={{ color: "rgba(255,255,255,0.4)" }}>Early Birds:</span> <span style={{ color: "#F5C842" }}>{globalStats.early_birds_filled}/100</span></div>
+              <div><span style={{ color: "rgba(255,255,255,0.4)" }}>TVL:</span> <span style={{ color: "#3ABFAA" }}>{Number(globalStats.total_tvl_sui).toFixed(2)} SUI</span></div>
+            </div>
+          </div>
+        )}
         <SecurityBadges />
 
         <section className="draws">
@@ -470,6 +502,30 @@ export default function App() {
 
         {/* Tab: Stake */}
         {activeTab === "stake" && <>
+          {account && userPoints && (
+            <section className="panel" style={{ background: userPoints.early_bird_rank ? "linear-gradient(135deg, rgba(245,200,66,0.08), rgba(198,127,232,0.08))" : userPoints.pioneer_rank ? "linear-gradient(135deg, rgba(198,127,232,0.08), rgba(58,191,170,0.08))" : "rgba(255,255,255,0.02)", border: userPoints.early_bird_rank ? "1px solid rgba(245,200,66,0.3)" : userPoints.pioneer_rank ? "1px solid rgba(198,127,232,0.3)" : "1px solid rgba(255,255,255,0.06)", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
+                <div>
+                  <div style={{ fontSize: "0.75rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>
+                    {userPoints.early_bird_rank ? "🌟 EARLY BIRD" : userPoints.pioneer_rank ? "🏆 PIONEER" : "👤 STAKER"} #{userPoints.early_bird_rank || userPoints.pioneer_rank || "—"}
+                  </div>
+                  <div style={{ fontSize: "2rem", fontWeight: 700, fontFamily: "DM Mono, monospace", color: userPoints.early_bird_rank ? "#F5C842" : userPoints.pioneer_rank ? "#C67FE8" : "#fff" }}>
+                    {Number(userPoints.total_points).toFixed(2)}<span style={{ fontSize: "0.9rem", marginLeft: 6, color: "rgba(255,255,255,0.4)" }}>pts</span>
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Multiplier</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: 700, color: userPoints.early_bird_rank ? "#F5C842" : userPoints.pioneer_rank ? "#C67FE8" : "#3ABFAA" }}>
+                    {Number(userPoints.multiplier).toFixed(1)}x
+                  </div>
+                  <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)", marginTop: 2 }}>FOREVER</div>
+                </div>
+              </div>
+              <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "0.75rem" }}>
+                Earn ~{(Number(userPoints.current_stake_sui) * Number(userPoints.multiplier)).toFixed(2)} pts/day · {Number(userPoints.current_stake_sui).toFixed(2)} SUI staked
+              </div>
+            </section>
+          )}
           <div className="two-col">
             <section className="panel stake-panel">
               <div className="panel-title">Deposit SUI</div>
@@ -506,7 +562,7 @@ export default function App() {
                   {loyaltyData.multiplier.toFixed(2)}x · {loyaltyData.daysStaked}d staked · {loyaltyData.streakDays}d streak
                 </div>
               )}
-              <p className="loyalty-note">Streak bonus up to +0.3x · Resets on full withdrawal</p>
+              <p className="loyalty-note">Resets on full withdrawal</p>
               <div className="info-rows">
                 <div className="info-row"><span>Min. deposit</span><span>1 SUI</span></div>
                 <div className="info-row"><span>Draw entry</span><span>10 / 50 / 200 SUI</span></div>

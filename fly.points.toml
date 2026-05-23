@@ -1,0 +1,10 @@
+app = "surge-points"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile.points"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"
