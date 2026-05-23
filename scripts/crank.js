@@ -102,18 +102,18 @@ async function fetchStakers(client) {
 
 // Protocol Fees (in basis points, 100 = 1%)
 const CRANK_FEE_BPS = 100n;   // 1% to crank wallet (operations)
-const OWNER_FEE_BPS = 100n;   // 1% to owner wallet (revenue)
-const OWNER_ADDRESS = '0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95';
+const MARKETING_FEE_BPS = 100n;   // 1% to marketing fund
+const MARKETING_ADDRESS = '0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95';
 
 async function harvestYield(client, keypair, pendingYield) {
   const crankFee = (pendingYield * CRANK_FEE_BPS) / 10000n;
-  const ownerFee = (pendingYield * OWNER_FEE_BPS) / 10000n;
-  const toPool = pendingYield - crankFee - ownerFee;
+  const marketingFee = (pendingYield * MARKETING_FEE_BPS) / 10000n;
+  const toPool = pendingYield - crankFee - marketingFee;
   
   console.log(`  🌾 Harvesting ${(Number(pendingYield)/1e9).toFixed(6)} SUI`);
   console.log(`     → Pool: ${(Number(toPool)/1e9).toFixed(6)} SUI (98%)`);
   console.log(`     → Crank: ${(Number(crankFee)/1e9).toFixed(6)} SUI (1%)`);
-  console.log(`     → Owner: ${(Number(ownerFee)/1e9).toFixed(6)} SUI (1%)`);
+  console.log(`     → Marketing: ${(Number(marketingFee)/1e9).toFixed(6)} SUI (1%)`);
   
   try {
     const tx = new Transaction();
@@ -130,10 +130,10 @@ async function harvestYield(client, keypair, pendingYield) {
     
     // 2. Split: [crank_fee, owner_fee] from harvested coin
     // Only split if amounts > 0 (Sui doesn't allow 0 splits)
-    if (crankFee > 0n && ownerFee > 0n) {
-      const [crankCoin, ownerCoin] = tx.splitCoins(harvested, [crankFee, ownerFee]);
+    if (crankFee > 0n && marketingFee > 0n) {
+      const [crankCoin, marketingCoin] = tx.splitCoins(harvested, [crankFee, marketingFee]);
       tx.transferObjects([crankCoin], keypair.toSuiAddress());
-      tx.transferObjects([ownerCoin], OWNER_ADDRESS);
+      tx.transferObjects([marketingCoin], MARKETING_ADDRESS);
     } else if (crankFee > 0n) {
       const [crankCoin] = tx.splitCoins(harvested, [crankFee]);
       tx.transferObjects([crankCoin], keypair.toSuiAddress());
