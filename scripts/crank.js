@@ -16,7 +16,7 @@ const ADMIN_CAP_DRAW   = process.env.ADMIN_CAP_DRAW ?? '';
 const POOL_ADMIN_CAP   = process.env.POOL_ADMIN_CAP ?? '';
 const VAULT_ADMIN_CAP  = process.env.VAULT_ADMIN_CAP ?? '';
 
-const POLL_MS          = 10_800_000;  // 3 hours
+const POLL_MS          = 21_600_000;  // 6 hours
 
 // Sui shared Random object (fixed address on all networks)
 const SUI_RANDOM = '0x0000000000000000000000000000000000000000000000000000000000000008';
