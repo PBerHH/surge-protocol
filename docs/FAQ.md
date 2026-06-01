@@ -7,7 +7,7 @@ Surge Protocol is a no-loss prize savings game on Sui. Stake SUI to earn real va
 
 ### How does it work?
 1. Stake SUI through Surge Protocol (minimum 1 SUI)
-2. Your SUI is delegated to Triton One validator — earning real yield (~2–3% APY)
+2. Your SUI is delegated to Triton One validator — earning real yield (~1.5% APY)
 3. Validator yield is harvested automatically each epoch
 4. Yield funds three prize pools: Spark (every 6h), Pulse (weekly), Surge (monthly)
 5. Winners drawn via `sui::random` on-chain VRF — provably fair

@@ -17,7 +17,7 @@ Think of it like a savings account where instead of earning interest, you get lo
 ## How it works
 
 1. **Stake SUI** — delegated directly to Triton One validator (minimum 1 SUI)
-2. **Earn real yield** — ~2–3% APY from on-chain validator rewards
+2. **Earn real yield** — ~1.5% APY from on-chain validator rewards
 3. **Earn draw tickets** — automatically based on your stake
 4. **Yield funds prizes** — harvested every epoch and split into prize pools
 5. **Draws trigger automatically** — on-chain via `sui::random` VRF
