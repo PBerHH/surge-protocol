@@ -5,6 +5,7 @@ import { Transaction } from "@mysten/sui/transactions";
 
 // ── Contract Config (V3 — Security Fixed) ───────────────────────────────────
 const PACKAGE     = "0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c"; // V6
+const PACKAGE_V5    = "0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb"; // V5 StakingReceipt type
 const STAKING_VAULT = "0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8ab702562";
 const SUI_SYSTEM   = "0x0000000000000000000000000000000000000000000000000000000000000005";
 const PACKAGE_TYPE = "0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3";  // original-id — Typ-Filter & Event-Queries
@@ -237,8 +238,12 @@ export default function App() {
   const fetchReceipts = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const objs = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE}::stake_vault::StakingReceipt` }, options: { showContent: true } });
-      setUserReceipts(objs.data.map(o => o.data?.content?.fields).filter(Boolean));
+      const [r1, r2] = await Promise.all([
+        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE}::stake_vault::StakingReceipt` }, options: { showContent: true } }),
+        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE_V5}::stake_vault::StakingReceipt` }, options: { showContent: true } }),
+      ]);
+      const all = [...r1.data, ...r2.data].map(o => o.data?.content?.fields && { ...o.data.content.fields, objectId: o.data.objectId }).filter(Boolean);
+      setUserReceipts(all);
     } catch (e) { console.error(e); }
   }, [account, client]);
 
@@ -293,9 +298,12 @@ export default function App() {
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      const events = await client.queryEvents({ query: { MoveEventType: `${PACKAGE_TYPE}::stake_vault::Deposited` }, limit: 50 });
+      const [e1, e2] = await Promise.all([
+        client.queryEvents({ query: { MoveEventType: `${PACKAGE_V5}::stake_vault::Staked` }, limit: 50 }),
+        client.queryEvents({ query: { MoveEventType: `${PACKAGE}::stake_vault::Staked` }, limit: 50 }),
+      ]);
       const stakes = {};
-      for (const ev of events.data) {
+      for (const ev of [...e1.data, ...e2.data]) {
         const f = ev.parsedJson;
         if (f?.staker && f?.amount_mist) stakes[f.staker] = (stakes[f.staker] ?? 0n) + BigInt(f.amount_mist);
       }
@@ -747,9 +755,9 @@ export default function App() {
               <p className="loyalty-note">Resets on full withdrawal</p>
               <div className="info-rows">
                 <div className="info-row"><span>Min. deposit</span><span>1 SUI</span></div>
-                <div className="info-row"><span>Draw entry</span><span>10 / 50 / 200 SUI</span></div>
+                <div className="info-row"><span>Draw entry</span><span>1 / 10 / 50 SUI</span></div>
                 <div className="info-row"><span>Unstake delay</span><span>1 epoch (~24h)</span></div>
-                <div className="info-row"><span>Protocol fee</span><span>2% of yield</span></div>
+                <div className="info-row"><span>Protocol fee</span><span style={{fontSize:"0.8rem", textAlign:"right"}}>2% of yield<br/><span style={{color:"rgba(255,255,255,0.4)"}}>1% ops · 1% marketing</span></span></div>
                 <div className="info-row"><span>Randomness</span><span>sui::random (on-chain)</span></div>
               </div>
             </section>
@@ -905,7 +913,7 @@ export default function App() {
             { q: "How often are draws held?", a: "Spark every 6h (3 winners), Pulse weekly (4 winners), Surge monthly (1 jackpot). Fully automated by the Crank.", icon: "⏰" },
             { q: "What is the unstake delay?", a: "1 epoch (~24 hours). After requesting unstake, wait one epoch, then withdraw your full principal.", icon: "⏳" },
             { q: "What is the minimum deposit?", a: "1 SUI to deposit. You need 10 SUI for Spark draws, 50 SUI for Pulse, 200 SUI for Surge.", icon: "📥" },
-            { q: "Is the contract audited?", a: "Built for Sui Overflow 2026, open source on GitHub. Security fixes include AdminCap protection and on-chain VRF. Formal audit planned post-hackathon.", icon: "🛡️" },
+            { q: "Is the contract audited?", a: "Built for Sui Overflow 2026, open source on GitHub (surge-dev). Security fixes include AdminCap protection and on-chain VRF. Formal audit planned post-hackathon.", icon: "🛡️" },
           ].map((item, i) => (
             <div key={i} style={{ background: openFaq === i ? "rgba(232,160,39,0.04)" : "var(--bg2)", border: `0.5px solid ${openFaq === i ? "rgba(232,160,39,0.2)" : "var(--border)"}`, borderRadius: 10, overflow: "hidden", transition: "all 0.2s" }}>
               <button onClick={() => setOpenFaq(openFaq === i ? null : i)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "1rem 1.2rem", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
@@ -922,7 +930,9 @@ export default function App() {
 
       <footer className="footer">
         <span>Surge Protocol · Sui Mainnet · V4</span>
-        <a href="https://github.com/PBerHH/surge-protocol" target="_blank" rel="noreferrer">GitHub ↗</a>
+        <a href="https://github.com/surge-dev/surge-protocol" target="_blank" rel="noreferrer">GitHub ↗</a>
+        <a href="https://x.com/Surge_Sui" target="_blank" rel="noreferrer">𝕏 Twitter ↗</a>
+        <a href="https://t.me/+RQpg1MTkHmJkNDQy" target="_blank" rel="noreferrer">Telegram ↗</a>
       </footer>
     </div>
   );
