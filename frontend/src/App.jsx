@@ -932,7 +932,7 @@ export default function App() {
         <span>Surge Protocol · Sui Mainnet · V4</span>
         <a href="https://github.com/surge-dev/surge-protocol" target="_blank" rel="noreferrer">GitHub ↗</a>
         <a href="https://x.com/Surge_Sui" target="_blank" rel="noreferrer">𝕏 Twitter ↗</a>
-        <a href="https://t.me/+RQpg1MTkHmJkNDQy" target="_blank" rel="noreferrer">Telegram ↗</a>
+        <a href="https://t.me/surge_sui" target="_blank" rel="noreferrer">Telegram ↗</a>
       </footer>
     </div>
   );
