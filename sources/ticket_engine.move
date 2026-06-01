@@ -1,8 +1,12 @@
-/// Surge V2 — Ticket Engine
-/// Anti-whale ticket formulas for all three draw types.
-///   Spark:  min(stake_SUI, 500)          × loyalty_bp / 10_000
-///   Pulse:  sqrt-scaled above 1 000 SUI  × loyalty_bp / 10_000
-///   Surge:  stake_SUI (linear, no cap)   × loyalty_bp / 10_000
+/// Surge V6 — Ticket Engine
+/// New draw design:
+///   Spark:  1 ticket per wallet (equal odds, no multiplier) — min 1 SUI
+///   Pulse:  √stake tickets × loyalty — min 10 SUI
+///   Surge:  √stake tickets × loyalty — min 50 SUI
+///
+/// Equal-odds Spark = every staker has the same daily chance regardless of size.
+/// √stake for Pulse/Surge = proportional but anti-whale (1000 SUI → 31 tickets,
+/// not 100× more than 10 SUI staker who gets 3 tickets).
 module surge::ticket_engine {
 
     use surge::loyalty_tracker::{Self, LoyaltyRecord};
@@ -10,14 +14,14 @@ module surge::ticket_engine {
 
     // ── Constants ──────────────────────────────────────────────────────────────
 
-    const SPARK_CAP: u64        = 500;    // hard cap at 500 tickets
-    const PULSE_LINEAR_CAP: u64 = 1_000;  // linear below 1 000 SUI, sqrt above
-    const MIN_STAKE_SUI: u64    = 10;     // absolute minimum
+    const SPARK_CAP: u64        = 1;   // equal odds: always 1 ticket
+    const PULSE_LINEAR_CAP: u64 = 0;   // unused (kept for accessor compatibility)
+    const MIN_STAKE_SUI: u64    = 1;   // 1 SUI minimum
 
-    // Unlock gates (in SUI)
-    const GATE_SPARK: u64  = 10;
-    const GATE_PULSE: u64  = 50;
-    const GATE_SURGE: u64  = 200;
+    // Gates (in whole SUI)
+    const GATE_SPARK: u64  = 1;   // any stake qualifies
+    const GATE_PULSE: u64  = 10;  // 10 SUI to enter weekly draw
+    const GATE_SURGE: u64  = 50;  // 50 SUI to enter monthly draw
 
     // ── Errors ─────────────────────────────────────────────────────────────────
 
@@ -25,20 +29,20 @@ module surge::ticket_engine {
 
     // ── Public Functions ───────────────────────────────────────────────────────
 
-    /// Spark tickets for a given stake amount (in whole SUI).
+    /// Spark — equal odds: exactly 1 ticket per wallet, no loyalty multiplier.
+    /// Every staker (≥ 1 SUI) has the same daily chance regardless of stake size.
     public fun spark_tickets(
         stake_sui: u64,
-        record: &LoyaltyRecord,
-        clock: &Clock,
+        _record: &LoyaltyRecord,
+        _clock: &Clock,
     ): u64 {
         assert!(stake_sui >= MIN_STAKE_SUI, E_BELOW_MINIMUM);
         if (stake_sui < GATE_SPARK) { return 0 };
-
-        let raw = if (stake_sui > SPARK_CAP) { SPARK_CAP } else { stake_sui };
-        apply_multiplier(raw, loyalty_tracker::multiplier_bp(record, clock))
+        1
     }
 
-    /// Pulse tickets — linear up to 1 000 SUI, sqrt-scaled above.
+    /// Pulse — √stake tickets × loyalty multiplier, minimum 10 SUI.
+    /// Anti-whale: 10 SUI → 3 tickets, 100 SUI → 10, 1 000 SUI → 31, 10 000 SUI → 100.
     public fun pulse_tickets(
         stake_sui: u64,
         record: &LoyaltyRecord,
@@ -46,17 +50,13 @@ module surge::ticket_engine {
     ): u64 {
         assert!(stake_sui >= MIN_STAKE_SUI, E_BELOW_MINIMUM);
         if (stake_sui < GATE_PULSE) { return 0 };
-
-        let raw = if (stake_sui <= PULSE_LINEAR_CAP) {
-            stake_sui
-        } else {
-            // 1 000 + sqrt(stake - 1 000)  — integer sqrt via Newton's method
-            PULSE_LINEAR_CAP + isqrt(stake_sui - PULSE_LINEAR_CAP)
-        };
-        apply_multiplier(raw, loyalty_tracker::multiplier_bp(record, clock))
+        let raw = isqrt(stake_sui);
+        let tickets = apply_multiplier(raw, loyalty_tracker::multiplier_bp(record, clock));
+        if (tickets == 0) { 1 } else { tickets }
     }
 
-    /// Surge tickets — fully linear, no cap.
+    /// Surge — √stake tickets × loyalty multiplier, minimum 50 SUI.
+    /// Same anti-whale formula as Pulse.
     public fun surge_tickets(
         stake_sui: u64,
         record: &LoyaltyRecord,
@@ -64,8 +64,9 @@ module surge::ticket_engine {
     ): u64 {
         assert!(stake_sui >= MIN_STAKE_SUI, E_BELOW_MINIMUM);
         if (stake_sui < GATE_SURGE) { return 0 };
-
-        apply_multiplier(stake_sui, loyalty_tracker::multiplier_bp(record, clock))
+        let raw = isqrt(stake_sui);
+        let tickets = apply_multiplier(raw, loyalty_tracker::multiplier_bp(record, clock));
+        if (tickets == 0) { 1 } else { tickets }
     }
 
     // ── Internal Helpers ───────────────────────────────────────────────────────

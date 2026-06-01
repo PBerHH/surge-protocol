@@ -10,14 +10,19 @@ module surge::reward_pool {
     use sui::transfer;
     use sui::event;
 
-    const FEE_BP: u64   = 200;
+    // Fee split: 2% total = 1% Marketing + 1% Operations
+    const MARKETING_FEE_BP: u64 = 100;
+    const OPERATIONS_FEE_BP: u64 = 100;
     const SPARK_BP: u64 = 2_000;
     const PULSE_BP: u64 = 3_000;
     #[allow(unused_const)]
     const SURGE_BP: u64 = 5_000;
     const BP_DENOM: u64 = 10_000;
 
-    const FEE_RECIPIENT: address = @0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95;
+    // Marketing fund — for community growth, partnerships, campaigns
+    const MARKETING_WALLET: address = @0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95;
+    // Operations wallet — crank gas, infrastructure
+    const OPERATIONS_WALLET: address = @0x2a587fd1789212292af4337cacdc7bcbca496e01a6538f46c08968d41d6a83c0;
 
     const E_INSUFFICIENT_BALANCE: u64 = 1;
 
@@ -70,14 +75,19 @@ module surge::reward_pool {
         let gross = coin::value(&yield_coin);
         let mut bal = coin::into_balance(yield_coin);
 
-        let fee   = (gross * FEE_BP)   / BP_DENOM;
+        let marketing_fee  = (gross * MARKETING_FEE_BP)  / BP_DENOM;
+        let operations_fee = (gross * OPERATIONS_FEE_BP) / BP_DENOM;
         let spark = (gross * SPARK_BP) / BP_DENOM;
         let pulse = (gross * PULSE_BP) / BP_DENOM;
-        let surge = gross - fee - spark - pulse;
+        let surge = gross - marketing_fee - operations_fee - spark - pulse;
 
-        if (fee > 0) {
-            let fee_coin = coin::from_balance(balance::split(&mut bal, fee), ctx);
-            transfer::public_transfer(fee_coin, FEE_RECIPIENT);
+        if (marketing_fee > 0) {
+            let coin = coin::from_balance(balance::split(&mut bal, marketing_fee), ctx);
+            transfer::public_transfer(coin, MARKETING_WALLET);
+        };
+        if (operations_fee > 0) {
+            let coin = coin::from_balance(balance::split(&mut bal, operations_fee), ctx);
+            transfer::public_transfer(coin, OPERATIONS_WALLET);
         };
 
         balance::join(&mut pool.spark_pool, balance::split(&mut bal, spark));
@@ -87,7 +97,7 @@ module surge::reward_pool {
 
         event::emit(YieldDeposited {
             gross_mist: gross,
-            fee_mist: fee,
+            fee_mist: marketing_fee + operations_fee,
             spark_mist: spark,
             pulse_mist: pulse,
             surge_mist: surge,
@@ -137,7 +147,7 @@ module surge::reward_pool {
     public fun spark_balance(pool: &RewardPool): u64  { balance::value(&pool.spark_pool) }
     public fun pulse_balance(pool: &RewardPool): u64  { balance::value(&pool.pulse_pool) }
     public fun surge_balance(pool: &RewardPool): u64  { balance::value(&pool.surge_pool) }
-    public fun treasury_balance(pool: &RewardPool): u64 { 0 }
+    public fun treasury_balance(_pool: &RewardPool): u64 { 0 }
 
     #[test_only]
     public fun init_for_testing(ctx: &mut TxContext) { init(ctx); }

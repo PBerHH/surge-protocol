@@ -2,13 +2,13 @@
 
 **Prize-linked staking on Sui. Your principal is always safe — only the yield wins prizes.**
 
-Live: [surge-protocol-chi.vercel.app](https://surge-protocol-chi.vercel.app)
+Live: [surgeonsui.com](https://surgeonsui.com)
 
 ---
 
 ## What is Surge?
 
-Surge is a no-loss lottery built on Sui. Users stake SUI, earn yield, and that yield funds prize pools. Your principal is never at risk — you can always withdraw everything you put in.
+Surge is a no-loss prize savings game built on Sui. Users stake SUI with a real validator, earn yield, and that yield funds prize pools. Your principal is never at risk — you can always withdraw everything you put in.
 
 Think of it like a savings account where instead of earning interest, you get lottery tickets.
 
@@ -16,51 +16,56 @@ Think of it like a savings account where instead of earning interest, you get lo
 
 ## How it works
 
-1. **Stake SUI** — deposit into the Surge vault (minimum 1 SUI)
-2. **Earn tickets** — the more you stake, the more draw tickets you get
-3. **Yield funds prizes** — ~1.5% APY yield is harvested and split into prize pools
-4. **Draws happen automatically** — the Crank triggers draws on-chain
-5. **Winners are paid** — directly to their wallet, no claiming needed
+1. **Stake SUI** — delegated directly to Triton One validator (minimum 1 SUI)
+2. **Earn real yield** — ~2–3% APY from on-chain validator rewards
+3. **Earn draw tickets** — automatically based on your stake
+4. **Yield funds prizes** — harvested every epoch and split into prize pools
+5. **Draws trigger automatically** — on-chain via `sui::random` VRF
+6. **Winners paid directly** — to their wallet, no claiming needed
 
 ### Draw schedule
 
-| Draw | Frequency | Winners | Pool share |
-|------|-----------|---------|------------|
-| ⚡ Spark | Every 6 hours | 3 | 20% |
-| 🔄 Pulse | Weekly | 4 | 30% |
-| 🌊 Surge | Monthly | 1 jackpot | 50% |
+| Draw | Frequency | Winners | Pool share | Minimum |
+|------|-----------|---------|------------|---------|
+| ⚡ Spark | Every 6h | 3 | 20% | 1 SUI — equal odds |
+| 🔄 Pulse | Weekly | 4 | 30% | 10 SUI — √stake |
+| 🌊 Surge | Monthly | 1 jackpot | 50% | 50 SUI — √stake |
 
-### Ticket gates
+**Spark is equal odds** — every staker has the same chance regardless of stake size.  
+**Pulse & Surge** use √stake scaling — proportional but anti-whale.
 
-| Draw | Minimum stake |
-|------|--------------|
-| ⚡ Spark | 10 SUI |
-| 🔄 Pulse | 50 SUI |
-| 🌊 Surge | 200 SUI |
+### Pioneer Points
+
+Early stakers earn bonus points for the future $SURGE token airdrop:
+- **Early Bird** (first 100): 3× multiplier forever
+- **Pioneer** (first 1,000): 2× multiplier forever
+- **Loyalty bonus**: up to 2× after continuous staking
 
 ---
 
 ## Security
 
-Three critical vulnerabilities were identified and fixed:
+### On-chain Randomness
+**Problem:** Operator-controlled randomness could allow winner prediction.  
+**Fix:** `sui::random::Random` — on-chain verifiable VRF, no one can predict or manipulate.
 
-### Fix 1: VRF Manipulation
-**Problem:** `vrf_bytes` came from the Crank (Node.js `randomBytes`) — the operator could predict winners.  
-**Fix:** Replaced with `sui::random::Random` — on-chain verifiable randomness that no one can manipulate.
+### Access Control
+All sensitive functions require AdminCaps:
+- `harvest()` and `claim_rewards()` — `VaultAdminCap`
+- `award_spark/pulse/surge()` — `PoolAdminCap`
+- `trigger_spark/pulse/surge()` — `DrawAdminCap`
 
-### Fix 2: Unprotected Prize Claims
-**Problem:** `award_spark/pulse/surge()` were `public` without any access control — anyone could drain the prize pools.  
-**Fix:** All award functions now require `PoolAdminCap`.
+### Principal Safety
+User funds are delegated directly to Triton One validator via Sui's native staking. The vault never holds idle SUI — it's always earning real yield on-chain.
 
-### Fix 3: Yield Theft
-**Problem:** `harvest_yield()` was `public` — anyone could steal accumulated yield.  
-**Fix:** `harvest_yield()` now requires `VaultAdminCap`.
+### Upgrade Policy
+Package uses `compatible` upgrades — bugs can be fixed, but existing structs and public functions cannot be removed or changed. UpgradeCap is held by the team; a timelock is planned before TVL > 1M SUI.
 
 ### Security badges
 - 🔐 **On-chain VRF** — `sui::random`, not operator-controlled
-- 🛡️ **AdminCap Protected** — no public drain vectors
-- 🔒 **Principal Safe** — user funds never at risk
-- ⛓️ **Open Source** — fully verifiable on GitHub
+- 🛡️ **AdminCap protected** — no public drain vectors
+- 🔒 **Principal safe** — user funds delegated to Triton One
+- ⛓️ **Open source** — fully verifiable on-chain
 
 ---
 
@@ -68,29 +73,27 @@ Three critical vulnerabilities were identified and fixed:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                  Frontend (React)                │
-│         surge-protocol-chi.vercel.app            │
+│              Frontend (React + Vite)             │
+│                  surgeonsui.com                  │
 └──────────────────┬──────────────────────────────┘
                    │
 ┌──────────────────▼──────────────────────────────┐
-│              Sui Mainnet Contracts               │
+│              Sui Mainnet Contracts (V6)          │
 │                                                  │
-│  stake_vault    ──→  reward_pool                 │
-│  (user funds)        (prize pools)               │
-│       │                    │                     │
-│       └──→  draw_manager ◄─┘                    │
-│             (sui::random VRF)                    │
-│                    │                             │
-│             loyalty_tracker                      │
-│             ticket_engine                        │
+│  StakingVault  ──→  Triton One Validator         │
+│  (real yield)        (2–3% APY)                  │
+│       │                                          │
+│       └──→  reward_pool  ◄──  draw_manager       │
+│             (prize pools)     (sui::random VRF)  │
+│                                                  │
+│             loyalty_tracker + ticket_engine      │
 └──────────────────┬──────────────────────────────┘
                    │
 ┌──────────────────▼──────────────────────────────┐
-│              Crank (Node.js)                     │
-│              Fly.io — surge-crank                │
-│  - Injects simulated yield every minute          │
-│  - Harvests yield → reward pool                  │
-│  - Registers tickets for stakers                 │
+│              Crank v6 (Node.js, Fly.io)          │
+│  - Harvests real Triton yield every epoch        │
+│  - Routes rewards to prize pools (on-chain fee)  │
+│  - Registers draw tickets for stakers            │
 │  - Triggers draws when due                       │
 └─────────────────────────────────────────────────┘
 ```
@@ -101,23 +104,38 @@ Three critical vulnerabilities were identified and fixed:
 
 | Object | Address |
 |--------|---------|
-| Package | `0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3` |
-| Vault | `0x4bca5b44fcbb3cf79f3586c3ff4e4d3494975f1d8434de067a9a95b792150992` |
+| Package (latest) | `0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c` |
+| Original ID | `0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3` |
+| StakingVault | `0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8ab702562` |
 | DrawState | `0xee9f68a29ab16442600a9e12426431b240aed97cdf5108f44d8325401cc25fb0` |
 | RewardPool | `0xacf68b636a55c96a8269ab0b66d735a7bbfadf058821cc17f97bc32d49d6968f` |
+| UpgradeCap | `0x5921d677eb94f7020c04eeb37bc4299b5ec00d8bd1ba47d656c6055a93a1c32f` |
 
-Upgrade policy: `incompatible` — full flexibility for future improvements.  
-UpgradeCap: `0x5921d677eb94f7020c04eeb37bc4299b5ec00d8bd1ba47d656c6055a93a1c32f`
+Upgrade policy: `compatible` — bugs fixable, public interface preserved.
+
+---
+
+## Fee structure
+
+Transparent 2% fee on staking yield, split fully on-chain:
+
+- **98% → Prize pools** — Spark, Pulse, Surge draws
+- **1% → Operations** — crank automation, infrastructure, gas
+- **1% → Marketing** — partnerships, campaigns, community growth
+
+All fees are split automatically on-chain in `deposit_yield`. Verifiable on [Suiscan](https://suiscan.xyz).
 
 ---
 
 ## Tech stack
 
-- **Smart contracts** — Sui Move (Mainnet)
+- **Smart contracts** — Sui Move (Mainnet, V6)
+- **Validator** — Triton One (`0xa608b66f...`)
 - **Randomness** — `sui::random` (on-chain VRF)
 - **Frontend** — React + Vite + @mysten/dapp-kit
 - **Crank** — Node.js on Fly.io
-- **Hosting** — Vercel
+- **Points DB** — Supabase
+- **Hosting** — Vercel + Porkbun DNS
 
 ---
 
@@ -125,8 +143,8 @@ UpgradeCap: `0x5921d677eb94f7020c04eeb37bc4299b5ec00d8bd1ba47d656c6055a93a1c32f`
 
 ### Contracts
 ```bash
-cd surge-protocol
-sui client publish --gas-budget 200000000
+sui move build
+sui client upgrade --upgrade-capability <CAP_ID> --gas-budget 200000000
 ```
 
 ### Frontend
@@ -147,28 +165,16 @@ node crank.js
 
 ## Roadmap
 
-- [ ] Migrate function UI (one-click contract migration)
-- [ ] Duplicate winner prevention in draws
-- [ ] On-chain ticket calculation via `ticket_engine`
+- [x] Real validator staking (Triton One)
+- [x] On-chain fee split
+- [x] Equal-odds Spark draw
+- [x] Anti-whale √stake for Pulse & Surge
+- [x] Pioneer Points system
 - [ ] Formal security audit
-- [ ] UpgradeCap timelock for decentralization
+- [ ] UpgradeCap timelock
 - [ ] Multi-validator support
+- [ ] Partial unstake UI
 
 ---
 
 ## Built for Sui Overflow 2026
-
-Surge Protocol was built for the Sui Overflow 2026 hackathon.
-
-
-## Fee Structure
-
-Surge Protocol operates with a transparent 2% fee on staking yield:
-
-- **98% → Prize Pools** - Distributed to winners via Spark, Pulse, and Surge draws
-- **1% → Operations** - Covers crank automation, infrastructure, and gas costs
-- **1% → Marketing Fund** - Used for partnerships, campaigns, and community growth
-
-**Marketing Wallet (transparent):**0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95
-All fees are automatically split on-chain during yield harvests. You can verify transactions on [Sui Explorer](https://suiscan.xyz).
-

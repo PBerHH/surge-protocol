@@ -54,6 +54,12 @@ module surge::loyalty_tracker {
         }
     }
 
+    /// Convenience entry: create and transfer LoyaltyRecord to sender in one call
+    entry fun create_record(clock: &Clock, ctx: &mut TxContext) {
+        let record = new_record(clock, ctx);
+        transfer::transfer(record, tx_context::sender(ctx));
+    }
+
     /// Called once per epoch by the crank to advance the streak.
     public fun tick(record: &mut LoyaltyRecord, clock: &Clock, ctx: &TxContext) {
         assert!(record.owner == tx_context::sender(ctx), E_NOT_OWNER);

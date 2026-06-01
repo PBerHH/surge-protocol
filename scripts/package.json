@@ -5,7 +5,8 @@
   "main": "crank.ts",
   "scripts": {
     "start": "node crank.js",
-    "dev": "nodemon --exec node crank.js"
+    "dev": "nodemon --exec node crank.js",
+    "start:points": "node points-worker.js"
   },
   "dependencies": {
     "@mysten/sui": "^1.0.0",

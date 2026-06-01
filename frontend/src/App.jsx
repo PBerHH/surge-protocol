@@ -4,7 +4,10 @@ import { ConnectButton, useCurrentAccount, useSuiClient, useSignAndExecuteTransa
 import { Transaction } from "@mysten/sui/transactions";
 
 // ── Contract Config (V3 — Security Fixed) ───────────────────────────────────
-const PACKAGE     = "0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3";
+const PACKAGE     = "0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c"; // V6
+const STAKING_VAULT = "0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8ab702562";
+const SUI_SYSTEM   = "0x0000000000000000000000000000000000000000000000000000000000000005";
+const PACKAGE_TYPE = "0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3";  // original-id — Typ-Filter & Event-Queries
 const VAULT       = "0x4bca5b44fcbb3cf79f3586c3ff4e4d3494975f1d8434de067a9a95b792150992";
 const DRAW_STATE  = "0xee9f68a29ab16442600a9e12426431b240aed97cdf5108f44d8325401cc25fb0";
 const REWARD_POOL = "0xacf68b636a55c96a8269ab0b66d735a7bbfadf058821cc17f97bc32d49d6968f";
@@ -20,6 +23,34 @@ const LEGACY4_PACKAGE = "0x53a50af7d0aeb7190f5b06031b33dc3fb68859c00a767fc6683e6
 const LEGACY4_VAULT   = "0x64df43a049c9b24720e9aaa8939072907dda5cca69a7e557424b541ad16071e5";
 const LEGACY5_PACKAGE = "0x9b9f9e13070024a61b19699f1f5bcf92b4eaff0c3498c07113dde0cfb137aeef";
 const LEGACY5_VAULT   = "0x0a1d78d1e0084ddcc00b7b64de0703d6ed79ab6944e1bf27f38399cc979cb506";
+
+// Check if a receipt is in unstaking state
+function isUnstaking(receipt) {
+  if (!receipt) return false;
+  const u = receipt.unlock_ts_ms;
+  // null/undefined = not unstaking
+  if (u === null || u === undefined) return false;
+  // String or number with value = unstaking
+  if (typeof u === 'string' || typeof u === 'number') {
+    return String(u).length > 0 && u !== '0';
+  }
+  // Object with vec (Option<u64> shape)
+  if (u.vec && Array.isArray(u.vec)) return u.vec.length > 0;
+  if (u.fields?.vec && Array.isArray(u.fields.vec)) return u.fields.vec.length > 0;
+  return false;
+}
+
+// Get unlock timestamp from receipt (returns number or null)
+function getUnlockTs(receipt) {
+  if (!receipt) return null;
+  const u = receipt.unlock_ts_ms;
+  if (u === null || u === undefined) return null;
+  if (typeof u === 'string') return Number(u);
+  if (typeof u === 'number') return u;
+  if (u.vec?.[0]) return Number(u.vec[0]);
+  if (u.fields?.vec?.[0]) return Number(u.fields.vec[0]);
+  return null;
+}
 
 function fmt(mist, dec = 3) { return (Number(BigInt(mist ?? 0)) / 1e9).toFixed(dec); }
 function fmtSui(mist) {
@@ -110,9 +141,9 @@ function ApyCalculator({ suiPrice }) {
   const [calcAmount, setCalcAmount] = useState("100");
   const sui = parseFloat(calcAmount) || 0;
   const yearlyYield = sui * 0.05;
-  const sparkTickets = sui >= 10 ? Math.min(Math.floor(sui), 500) : 0;
-  const pulseTickets = sui >= 50 ? (sui <= 1000 ? Math.floor(sui) : Math.floor(1000 + Math.sqrt(sui - 1000))) : 0;
-  const surgeTickets = sui >= 200 ? Math.floor(sui) : 0;
+  const sparkTickets = sui >= 1 ? 1 : 0;
+  const pulseTickets = sui < 10 ? 0 : Math.max(1, Math.floor(Math.sqrt(sui)));
+  const surgeTickets = sui < 50 ? 0 : Math.max(1, Math.floor(Math.sqrt(sui)));
   return (
     <div className="panel">
       <div className="panel-title">📊 APY Calculator</div>
@@ -125,7 +156,7 @@ function ApyCalculator({ suiPrice }) {
         <div className="info-row"><span>Yearly yield (~5% APY)</span><span style={{ color: "#3ABFAA" }}>{yearlyYield.toFixed(4)} SUI</span></div>
         <div className="info-row"><span>⚡ Spark tickets</span><span style={{ color: sparkTickets > 0 ? "#F5C842" : "var(--text3)" }}>{sparkTickets > 0 ? sparkTickets : "min 10 SUI"}</span></div>
         <div className="info-row"><span>🔄 Pulse tickets</span><span style={{ color: pulseTickets > 0 ? "#3ABFAA" : "var(--text3)" }}>{pulseTickets > 0 ? pulseTickets : "min 50 SUI"}</span></div>
-        <div className="info-row"><span>🌊 Surge tickets</span><span style={{ color: surgeTickets > 0 ? "#C67FE8" : "var(--text3)" }}>{surgeTickets > 0 ? surgeTickets : "min 200 SUI"}</span></div>
+        <div className="info-row"><span>🌊 Surge tickets</span><span style={{ color: surgeTickets > 0 ? "#C67FE8" : "var(--text3)" }}>{surgeTickets > 0 ? surgeTickets : "min 50 SUI"}</span></div>
       </div>
     </div>
   );
@@ -163,11 +194,14 @@ export default function App() {
       const [pool, draw, vault] = await Promise.all([
         client.getObject({ id: REWARD_POOL, options: { showContent: true } }),
         client.getObject({ id: DRAW_STATE, options: { showContent: true } }),
-        client.getObject({ id: VAULT, options: { showContent: true } }),
+        client.getObject({ id: STAKING_VAULT, options: { showContent: true } }),
       ]);
       if (pool.data?.content?.fields) setPoolData(pool.data.content.fields);
       if (draw.data?.content?.fields) setDrawData(draw.data.content.fields);
-      if (vault.data?.content?.fields) setVaultData(vault.data.content.fields);
+      if (vault.data?.content?.fields) {
+        const f = vault.data.content.fields;
+        setVaultData({ ...f, total_staked: f.total_principal ?? 0, pending_yield: f.pending_rewards?.fields?.value ?? f.pending_rewards ?? 0 });
+      }
     } catch (e) { console.error(e); }
   }, [client]);
 
@@ -175,7 +209,7 @@ export default function App() {
 
   const fetchLastWinners = useCallback(async () => {
     try {
-      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE, module: 'reward_pool' } }, limit: 20, order: 'descending' });
+      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'reward_pool' } }, limit: 20, order: 'descending' });
       const winners = events.data.filter(e => e.type?.includes('PrizeAwarded') && Number(e.parsedJson?.amount_mist) > 0)
         .map(e => ({ winner: e.parsedJson.winner, amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs }));
       if (prevWinnersRef.current.length > 0 && winners.length > 0 && winners[0]?.ts !== prevWinnersRef.current[0]?.ts) launchConfetti();
@@ -203,7 +237,7 @@ export default function App() {
   const fetchReceipts = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const objs = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } });
+      const objs = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE}::stake_vault::StakingReceipt` }, options: { showContent: true } });
       setUserReceipts(objs.data.map(o => o.data?.content?.fields).filter(Boolean));
     } catch (e) { console.error(e); }
   }, [account, client]);
@@ -213,7 +247,7 @@ export default function App() {
   const fetchLoyalty = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const objs = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE}::loyalty_tracker::LoyaltyRecord` }, options: { showContent: true } });
+      const objs = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE_TYPE}::loyalty_tracker::LoyaltyRecord` }, options: { showContent: true } });
       if (objs.data.length > 0) {
         const f = objs.data[0].data?.content?.fields;
         if (f) {
@@ -249,7 +283,7 @@ export default function App() {
   const fetchMyWinnings = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE, module: 'reward_pool' } }, limit: 50, order: 'descending' });
+      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'reward_pool' } }, limit: 50, order: 'descending' });
       setMyWinnings(events.data.filter(e => e.type?.includes('PrizeAwarded') && e.parsedJson?.winner === account.address)
         .map(e => ({ amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs })));
     } catch (e) { console.error(e); }
@@ -259,7 +293,7 @@ export default function App() {
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      const events = await client.queryEvents({ query: { MoveEventType: `${PACKAGE}::stake_vault::Deposited` }, limit: 50 });
+      const events = await client.queryEvents({ query: { MoveEventType: `${PACKAGE_TYPE}::stake_vault::Deposited` }, limit: 50 });
       const stakes = {};
       for (const ev of events.data) {
         const f = ev.parsedJson;
@@ -285,7 +319,7 @@ export default function App() {
       const tx = new Transaction();
       tx.setGasPrice(1000);
       const [coin] = tx.splitCoins(tx.gas, [amt]);
-      tx.moveCall({ target: `${PACKAGE}::stake_vault::deposit`, arguments: [tx.object(VAULT), coin, tx.object("0x6")] });
+      tx.moveCall({ target: `${PACKAGE}::stake_vault::stake`, arguments: [tx.object(STAKING_VAULT), tx.object(SUI_SYSTEM), coin, tx.object("0x6")] });
       signAndExecute({ transaction: tx }, {
         onSuccess: (r) => { setTxStatus({ type: "success", msg: `Staked! Tx: ${r.digest.slice(0,16)}...` }); setTimeout(() => { fetchData(); fetchReceipts(); fetchLoyalty(); fetchLeaderboard(); }, 3000); },
         onError: (e) => setTxStatus({ type: "error", msg: e.message }),
@@ -297,11 +331,85 @@ export default function App() {
     setTxStatus({ type: "pending", msg: "Requesting unstake..." });
     const tx = new Transaction();
     tx.setGasPrice(1000);
-    tx.moveCall({ target: `${PACKAGE}::stake_vault::request_unstake`, arguments: [tx.object(receiptId), tx.object("0x6")] });
+    tx.moveCall({ target: `${PACKAGE}::stake_vault::request_unstake_staked`, arguments: [tx.object(STAKING_VAULT), tx.object(receiptId), tx.object("0x6")] });
     signAndExecute({ transaction: tx }, {
       onSuccess: () => { setTxStatus({ type: "success", msg: "Unstake requested — 1 epoch delay" }); setTimeout(fetchReceipts, 3000); },
       onError: (e) => setTxStatus({ type: "error", msg: e.message }),
     });
+  }
+
+
+  async function handleWithdraw(receiptId) {
+    setTxStatus({ type: "pending", msg: "Withdrawing..." });
+    try {
+      // Check if LoyaltyRecord exists
+      const objs = await client.getOwnedObjects({ 
+        owner: account.address, 
+        filter: { StructType: `${PACKAGE_TYPE}::loyalty_tracker::LoyaltyRecord` }, 
+        options: { showContent: true } 
+      });
+      
+      if (!objs.data.length) {
+        // Step 1: Create LoyaltyRecord first
+        setTxStatus({ type: "pending", msg: "Step 1/2: Creating loyalty record..." });
+        const tx1 = new Transaction();
+        tx1.setGasPrice(1000);
+        const record = tx1.moveCall({ 
+          target: `${PACKAGE}::loyalty_tracker::new_record`, 
+          arguments: [tx1.object("0x6")] 
+        });
+        tx1.transferObjects([record], tx1.pure.address(account.address));
+        
+        signAndExecute({ transaction: tx1 }, {
+          onSuccess: async () => {
+            setTxStatus({ type: "pending", msg: "Step 2/2: Withdrawing..." });
+            await new Promise(res => setTimeout(res, 3000));
+            
+            const objs2 = await client.getOwnedObjects({ 
+              owner: account.address, 
+              filter: { StructType: `${PACKAGE_TYPE}::loyalty_tracker::LoyaltyRecord` }, 
+              options: { showContent: true } 
+            });
+            if (!objs2.data.length) { 
+              setTxStatus({ type: "error", msg: "LoyaltyRecord creation failed" }); 
+              return; 
+            }
+            const loyaltyId = objs2.data[0].data.objectId;
+            const tx2 = new Transaction();
+            tx2.setGasPrice(1000);
+            tx2.moveCall({
+              target: `${PACKAGE}::stake_vault::withdraw_staked`,
+              arguments: [tx2.object(STAKING_VAULT), tx2.object(receiptId), tx2.object(loyaltyId), tx2.object("0x6")],
+            });
+            signAndExecute({ transaction: tx2 }, {
+              onSuccess: (r) => { 
+                setTxStatus({ type: "success", msg: `Withdrawn! Tx: ${r.digest.slice(0,16)}...` }); 
+                setTimeout(() => { fetchData(); fetchReceipts(); fetchLoyalty(); }, 3000); 
+              },
+              onError: (e) => setTxStatus({ type: "error", msg: e.message }),
+            });
+          },
+          onError: (e) => setTxStatus({ type: "error", msg: e.message }),
+        });
+        return;
+      }
+      
+      // LoyaltyRecord exists — direct withdraw
+      const loyaltyId = objs.data[0].data.objectId;
+      const tx = new Transaction();
+      tx.setGasPrice(1000);
+      tx.moveCall({
+        target: `${PACKAGE}::stake_vault::withdraw_staked`,
+        arguments: [tx.object(STAKING_VAULT), tx.object(receiptId), tx.object(loyaltyId), tx.object("0x6")],
+      });
+      signAndExecute({ transaction: tx }, {
+        onSuccess: (r) => { 
+          setTxStatus({ type: "success", msg: `Withdrawn! Tx: ${r.digest.slice(0,16)}...` }); 
+          setTimeout(() => { fetchData(); fetchReceipts(); fetchLoyalty(); }, 3000); 
+        },
+        onError: (e) => setTxStatus({ type: "error", msg: e.message }),
+      });
+    } catch (e) { setTxStatus({ type: "error", msg: e.message }); }
   }
 
   async function handleLegacyRequestUnstake(receiptId, pkg) {
@@ -315,6 +423,80 @@ export default function App() {
         onError: (e) => setLegacyStatus({ type: "error", msg: e.message }),
       });
     } catch (e) { setLegacyStatus({ type: "error", msg: e.message }); }
+  }
+
+
+  async function handleWithdraw(receiptId) {
+    setTxStatus({ type: "pending", msg: "Withdrawing..." });
+    try {
+      // Check if LoyaltyRecord exists
+      const objs = await client.getOwnedObjects({ 
+        owner: account.address, 
+        filter: { StructType: `${PACKAGE_TYPE}::loyalty_tracker::LoyaltyRecord` }, 
+        options: { showContent: true } 
+      });
+      
+      if (!objs.data.length) {
+        // Step 1: Create LoyaltyRecord first
+        setTxStatus({ type: "pending", msg: "Step 1/2: Creating loyalty record..." });
+        const tx1 = new Transaction();
+        tx1.setGasPrice(1000);
+        const record = tx1.moveCall({ 
+          target: `${PACKAGE}::loyalty_tracker::new_record`, 
+          arguments: [tx1.object("0x6")] 
+        });
+        tx1.transferObjects([record], tx1.pure.address(account.address));
+        
+        signAndExecute({ transaction: tx1 }, {
+          onSuccess: async () => {
+            setTxStatus({ type: "pending", msg: "Step 2/2: Withdrawing..." });
+            await new Promise(res => setTimeout(res, 3000));
+            
+            const objs2 = await client.getOwnedObjects({ 
+              owner: account.address, 
+              filter: { StructType: `${PACKAGE_TYPE}::loyalty_tracker::LoyaltyRecord` }, 
+              options: { showContent: true } 
+            });
+            if (!objs2.data.length) { 
+              setTxStatus({ type: "error", msg: "LoyaltyRecord creation failed" }); 
+              return; 
+            }
+            const loyaltyId = objs2.data[0].data.objectId;
+            const tx2 = new Transaction();
+            tx2.setGasPrice(1000);
+            tx2.moveCall({
+              target: `${PACKAGE}::stake_vault::withdraw_staked`,
+              arguments: [tx2.object(STAKING_VAULT), tx2.object(receiptId), tx2.object(loyaltyId), tx2.object("0x6")],
+            });
+            signAndExecute({ transaction: tx2 }, {
+              onSuccess: (r) => { 
+                setTxStatus({ type: "success", msg: `Withdrawn! Tx: ${r.digest.slice(0,16)}...` }); 
+                setTimeout(() => { fetchData(); fetchReceipts(); fetchLoyalty(); }, 3000); 
+              },
+              onError: (e) => setTxStatus({ type: "error", msg: e.message }),
+            });
+          },
+          onError: (e) => setTxStatus({ type: "error", msg: e.message }),
+        });
+        return;
+      }
+      
+      // LoyaltyRecord exists — direct withdraw
+      const loyaltyId = objs.data[0].data.objectId;
+      const tx = new Transaction();
+      tx.setGasPrice(1000);
+      tx.moveCall({
+        target: `${PACKAGE}::stake_vault::withdraw_staked`,
+        arguments: [tx.object(STAKING_VAULT), tx.object(receiptId), tx.object(loyaltyId), tx.object("0x6")],
+      });
+      signAndExecute({ transaction: tx }, {
+        onSuccess: (r) => { 
+          setTxStatus({ type: "success", msg: `Withdrawn! Tx: ${r.digest.slice(0,16)}...` }); 
+          setTimeout(() => { fetchData(); fetchReceipts(); fetchLoyalty(); }, 3000); 
+        },
+        onError: (e) => setTxStatus({ type: "error", msg: e.message }),
+      });
+    } catch (e) { setTxStatus({ type: "error", msg: e.message }); }
   }
 
   async function handleLegacyWithdraw(receiptId, pkg, vault) {
@@ -387,14 +569,14 @@ export default function App() {
   }
 
   function handleShare() {
-    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_staked ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surge-protocol-chi.vercel.app`;
+    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_staked ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surgeonsui.com`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
   }
 
   const sui = parseFloat(stakeAmount) || 0;
-  const sparkTickets = sui >= 10 ? Math.min(Math.floor(sui), 500) : 0;
-  const pulseTickets = sui >= 50 ? (sui <= 1000 ? Math.floor(sui) : Math.floor(1000 + Math.sqrt(sui - 1000))) : 0;
-  const surgeTickets = sui >= 200 ? Math.floor(sui) : 0;
+  const sparkTickets = sui >= 1 ? 1 : 0;
+  const pulseTickets = sui < 10 ? 0 : Math.max(1, Math.floor(Math.sqrt(sui)));
+  const surgeTickets = sui < 50 ? 0 : Math.max(1, Math.floor(Math.sqrt(sui)));
   const totalStaked = vaultData?.total_staked ?? 0;
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
   const myStakeMist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
@@ -471,7 +653,7 @@ export default function App() {
             </div>
             <div style={{ display: "flex", gap: "1.5rem", fontSize: "0.75rem", fontFamily: "DM Mono, monospace" }}>
               <div><span style={{ color: "rgba(255,255,255,0.4)" }}>Early Birds:</span> <span style={{ color: "#F5C842" }}>{globalStats.early_birds_filled}/100</span></div>
-              <div><span style={{ color: "rgba(255,255,255,0.4)" }}>TVL:</span> <span style={{ color: "#3ABFAA" }}>{Number(globalStats.total_tvl_sui).toFixed(2)} SUI</span></div>
+              <div><span style={{ color: "rgba(255,255,255,0.4)" }}>TVL:</span> <span style={{ color: "#3ABFAA" }}>{fmtSui(vaultData?.total_staked ?? 0)} SUI</span></div>
             </div>
           </div>
         )}
@@ -580,9 +762,20 @@ export default function App() {
                 <div className="position-row" key={i}>
                   <div>
                     <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
-                    <div className="pos-status">{r.unlock_ts_ms ? "⏳ Unstaking in progress" : "✅ Active — earning tickets"}</div>
+                    <div className="pos-status">{(() => {
+                      if (!r.unlock_ts_ms) return "✅ Active — earning tickets";
+                      const unlockTs = Number(r.unlock_ts_ms);
+                      if (Date.now() >= unlockTs) return "🟢 Ready to withdraw";
+                      const diff = unlockTs - Date.now();
+                      const h = Math.floor(diff / 3600000);
+                      const m = Math.floor((diff % 3600000) / 60000);
+                      return `⏳ Unstaking — ${h}h ${m}m left`;
+                    })()}</div>
                   </div>
                   {!r.unlock_ts_ms && <button className="unstake-btn" onClick={() => handleUnstake(r.id?.id)}>Unstake</button>}
+                  {r.unlock_ts_ms && Date.now() >= Number(r.unlock_ts_ms) && (
+                    <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }} onClick={() => handleWithdraw(r.id?.id)}>Withdraw</button>
+                  )}
                 </div>
               ))}
             </section>

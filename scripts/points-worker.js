@@ -7,7 +7,8 @@ const cron = require('node-cron');
 
 // Config
 const NETWORK = process.env.NETWORK ?? 'mainnet';
-const PACKAGE_ID = process.env.PACKAGE_ID ?? '';
+const PACKAGE_ID      = process.env.PACKAGE_ID      ?? '';
+const PACKAGE_TYPE_ID  = process.env.PACKAGE_TYPE_ID  ?? '';
 const SUPABASE_URL = process.env.SUPABASE_URL ?? '';
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY ?? '';
 
@@ -39,17 +40,27 @@ async function fetchAllStakers() {
   console.log('📡 Fetching stakers from chain...');
   
   let allEvents = [];
+
+  // Query old Deposited events (legacy vault, for historical points)
   let cursor = null;
-  
   while (true) {
     const result = await sui.queryEvents({
-      query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Deposited` },
-      limit: 50,
-      cursor,
+      query: { MoveEventType: `${PACKAGE_TYPE_ID}::stake_vault::Deposited` },
+      limit: 50, cursor,
     });
-    
-    allEvents = allEvents.concat(result.data);
-    
+    allEvents = allEvents.concat(result.data.map(e => ({ ...e, _eventType: 'legacy' })));
+    if (!result.hasNextPage) break;
+    cursor = result.nextCursor;
+  }
+
+  // Query new Staked events (real StakingVault, Triton)
+  cursor = null;
+  while (true) {
+    const result = await sui.queryEvents({
+      query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Staked` },
+      limit: 50, cursor,
+    });
+    allEvents = allEvents.concat(result.data.map(e => ({ ...e, _eventType: 'staking' })));
     if (!result.hasNextPage) break;
     cursor = result.nextCursor;
   }
@@ -65,6 +76,7 @@ async function fetchAllStakers() {
     }
     
     stakers[staker].totalMist += BigInt(amount_mist);
+    if (ev._eventType === 'staking') stakers[staker].realMist = (stakers[staker].realMist ?? 0n) + BigInt(amount_mist);
     stakers[staker].firstStakeMs = Math.min(stakers[staker].firstStakeMs, parseInt(ev.timestampMs));
   }
   
@@ -136,7 +148,7 @@ async function calculateAndUpdatePoints() {
     let processed = 0;
     
     for (const [address, info] of Object.entries(stakers)) {
-      const stakeSui = Number(info.totalMist) / 1e9;
+      const stakeSui = Number(info.realMist ?? info.totalMist) / 1e9;
       
       // Get or create wallet
       const wallet = await getOrCreateWallet(address, info.firstStakeMs);

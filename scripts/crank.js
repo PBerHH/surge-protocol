@@ -7,19 +7,27 @@ const { fromB64 } = require('@mysten/sui/utils');
 const fs = require('fs');
 const os = require('os');
 
-const NETWORK          = process.env.NETWORK ?? 'mainnet';
-const PACKAGE_ID       = process.env.PACKAGE_ID ?? '';
-const DRAW_STATE       = process.env.DRAW_STATE ?? '';
-const REWARD_POOL      = process.env.REWARD_POOL ?? '';
-const VAULT            = process.env.VAULT ?? '';
-const ADMIN_CAP_DRAW   = process.env.ADMIN_CAP_DRAW ?? '';
-const POOL_ADMIN_CAP   = process.env.POOL_ADMIN_CAP ?? '';
-const VAULT_ADMIN_CAP  = process.env.VAULT_ADMIN_CAP ?? '';
+// ── Env ────────────────────────────────────────────────────────────────────────
 
-const POLL_MS          = 21_600_000;  // 6 hours
+const NETWORK          = process.env.NETWORK          ?? 'mainnet';
+const PACKAGE_ID       = process.env.PACKAGE_ID       ?? ''; // latest published-at — moveCalls
+const PACKAGE_TYPE_ID  = process.env.PACKAGE_TYPE_ID  ?? ''; // original-id — legacy event queries
+const STAKING_VAULT    = process.env.STAKING_VAULT    ?? ''; // real staking vault (V5+)
+const VAULT            = process.env.VAULT            ?? ''; // legacy idle vault
+const DRAW_STATE       = process.env.DRAW_STATE       ?? '';
+const REWARD_POOL      = process.env.REWARD_POOL      ?? '';
+const ADMIN_CAP_DRAW   = process.env.ADMIN_CAP_DRAW   ?? '';
+const POOL_ADMIN_CAP   = process.env.POOL_ADMIN_CAP   ?? '';
+const VAULT_ADMIN_CAP  = process.env.VAULT_ADMIN_CAP  ?? '';
 
-// Sui shared Random object (fixed address on all networks)
+const POLL_MS          = 21_600_000; // 6 hours
+
+// Fixed Sui system objects
+const SUI_SYSTEM = '0x0000000000000000000000000000000000000000000000000000000000000005';
+const SUI_CLOCK  = '0x0000000000000000000000000000000000000000000000000000000000000006';
 const SUI_RANDOM = '0x0000000000000000000000000000000000000000000000000000000000000008';
+
+// ── Keypair ───────────────────────────────────────────────────────────────────
 
 function loadKeypair() {
   if (process.env.PRIVATE_KEY_B64) {
@@ -34,6 +42,10 @@ function loadKeypair() {
   return Ed25519Keypair.fromSecretKey(secret);
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const fmt = n => (Number(BigInt(n ?? 0)) / 1e9).toFixed(4);
+
 function formatCountdown(seconds) {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -44,14 +56,35 @@ function formatCountdown(seconds) {
   return `${m}m ${s}s`;
 }
 
-async function fetchVault(client) {
-  const obj = await client.getObject({ id: VAULT, options: { showContent: true } });
+function balVal(field) {
+  return BigInt(field?.fields?.value ?? field ?? 0);
+}
+
+// ── Fetchers ──────────────────────────────────────────────────────────────────
+
+async function fetchStakingVault(client) {
+  const obj = await client.getObject({ id: STAKING_VAULT, options: { showContent: true } });
   if (obj.data?.content?.dataType !== 'moveObject') return null;
   const f = obj.data.content.fields;
   return {
-    totalStaked: BigInt(f.total_staked ?? 0),
-    pendingYield: BigInt(f.pending_yield ?? 0),
+    totalPrincipal:    BigInt(f.total_principal    ?? 0),
+    pendingRewards:    balVal(f.pending_rewards),
+    liquidPrincipal:   balVal(f.liquid_principal),
+    pendingUnstake:    BigInt(f.pending_unstake_mist ?? 0),
   };
+}
+
+async function fetchLegacyVault(client) {
+  if (!VAULT) return null;
+  try {
+    const obj = await client.getObject({ id: VAULT, options: { showContent: true } });
+    if (obj.data?.content?.dataType !== 'moveObject') return null;
+    const f = obj.data.content.fields;
+    return {
+      totalStaked:  BigInt(f.total_staked ?? 0),
+      pendingYield: BigInt(f.pending_yield ?? 0),
+    };
+  } catch { return null; }
 }
 
 async function fetchDrawState(client) {
@@ -70,19 +103,21 @@ async function fetchPoolBalances(client) {
   if (obj.data?.content?.dataType !== 'moveObject') return null;
   const f = obj.data.content.fields;
   return {
-    spark: BigInt(f.spark_pool?.fields?.value ?? f.spark_pool ?? 0),
-    pulse: BigInt(f.pulse_pool?.fields?.value ?? f.pulse_pool ?? 0),
-    surge: BigInt(f.surge_pool?.fields?.value ?? f.surge_pool ?? 0),
+    spark: balVal(f.spark_pool),
+    pulse: balVal(f.pulse_pool),
+    surge: balVal(f.surge_pool),
   };
 }
 
-async function fetchStakers(client) {
+/// Query Staked events from the new StakingVault (V5+).
+/// Uses PACKAGE_ID (current published-at) — updated on each upgrade via fly secrets.
+async function fetchStakingStakers(client) {
   try {
     const events = await client.queryEvents({
-      query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Deposited` },
-      limit: 50,
+      query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Staked` },
+      limit: 100,
     });
-    console.log(`  📋 Found ${events.data.length} deposit events`);
+    console.log(`  📋 Found ${events.data.length} stake events (new vault)`);
     const stakers = {};
     for (const ev of events.data) {
       const fields = ev.parsedJson;
@@ -90,75 +125,93 @@ async function fetchStakers(client) {
         const addr = fields.staker;
         const amt = BigInt(fields.amount_mist);
         stakers[addr] = (stakers[addr] ?? 0n) + amt;
-        console.log(`  👤 Staker: ${addr.slice(0,10)}... ${(Number(amt)/1e9).toFixed(2)} SUI`);
+        console.log(`  👤 Staker: ${addr.slice(0, 10)}... ${(Number(amt) / 1e9).toFixed(2)} SUI`);
       }
     }
     return stakers;
   } catch (e) {
-    console.error('  ⚠️ Could not fetch stakers:', e.message);
+    console.error('  ⚠️ Could not fetch staking stakers:', e.message);
     return {};
   }
 }
 
-// Protocol Fees (in basis points, 100 = 1%)
-const CRANK_FEE_BPS = 100n;   // 1% to crank wallet (operations)
-const MARKETING_FEE_BPS = 100n;   // 1% to marketing fund
-const MARKETING_ADDRESS = '0x1de8cef32b6324c2ade5659caa86db8e0dc3c1fd7a76dda17ff4c8de330f5f95';
+// ── Real Harvest (V5) ─────────────────────────────────────────────────────────
 
-async function harvestYield(client, keypair, pendingYield) {
-  const crankFee = (pendingYield * CRANK_FEE_BPS) / 10000n;
-  const marketingFee = (pendingYield * MARKETING_FEE_BPS) / 10000n;
-  const toPool = pendingYield - crankFee - marketingFee;
-  
-  console.log(`  🌾 Harvesting ${(Number(pendingYield)/1e9).toFixed(6)} SUI`);
-  console.log(`     → Pool: ${(Number(toPool)/1e9).toFixed(6)} SUI (98%)`);
-  console.log(`     → Crank: ${(Number(crankFee)/1e9).toFixed(6)} SUI (1%)`);
-  console.log(`     → Marketing: ${(Number(marketingFee)/1e9).toFixed(6)} SUI (1%)`);
-  
+/// 3-step PTB:
+///   1. harvest(staking_vault, vault_admin_cap, sui_system) — unstake, route rewards, re-stake
+///   2. claim_rewards(staking_vault, vault_admin_cap) → Coin<SUI>
+///   3. deposit_yield(reward_pool, coin, pool_admin_cap) — on-chain fee split + pool distribution
+///
+/// Fee split (2%) is handled entirely on-chain by deposit_yield.
+/// No off-chain fee deduction needed.
+async function harvestStaking(client, keypair, pendingRewards) {
+  console.log(`  🌾 Harvesting real Triton yield — pending: ${fmt(pendingRewards)} SUI`);
+
   try {
     const tx = new Transaction();
     tx.setGasPrice(1000);
-    
-    // 1. Harvest from vault → returns Coin<SUI>
-    const harvested = tx.moveCall({
-      target: `${PACKAGE_ID}::stake_vault::harvest_yield`,
+
+    // Step 1: withdraw all delegations, separate rewards, re-stake principal
+    tx.moveCall({
+      target: `${PACKAGE_ID}::stake_vault::harvest`,
       arguments: [
-        tx.object(VAULT),
+        tx.object(STAKING_VAULT),
+        tx.object(VAULT_ADMIN_CAP),
+        tx.object(SUI_SYSTEM),
+      ],
+    });
+
+    // Step 2: pull the rewards coin out
+    const rewardsCoin = tx.moveCall({
+      target: `${PACKAGE_ID}::stake_vault::claim_rewards`,
+      arguments: [
+        tx.object(STAKING_VAULT),
         tx.object(VAULT_ADMIN_CAP),
       ],
     });
-    
-    // 2. Split: [crank_fee, owner_fee] from harvested coin
-    // Only split if amounts > 0 (Sui doesn't allow 0 splits)
-    if (crankFee > 0n && marketingFee > 0n) {
-      const [crankCoin, marketingCoin] = tx.splitCoins(harvested, [crankFee, marketingFee]);
-      tx.transferObjects([crankCoin], keypair.toSuiAddress());
-      tx.transferObjects([marketingCoin], MARKETING_ADDRESS);
-    } else if (crankFee > 0n) {
-      const [crankCoin] = tx.splitCoins(harvested, [crankFee]);
-      tx.transferObjects([crankCoin], keypair.toSuiAddress());
-    }
-    
-    // 3. Deposit remainder to pool
+
+    // Step 3: distribute to pools (on-chain 2% fee split inside deposit_yield)
     tx.moveCall({
       target: `${PACKAGE_ID}::reward_pool::deposit_yield`,
       arguments: [
         tx.object(REWARD_POOL),
-        harvested,
+        rewardsCoin,
         tx.object(POOL_ADMIN_CAP),
       ],
     });
-    
-    const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true } });
-    if (r.effects?.status?.status === 'success') console.log(`  ✅ Harvest complete — tx: ${r.digest}`);
-    else console.error('  ❌ Harvest failed:', r.effects?.status?.error);
-  } catch (e) { console.error('  ❌ Harvest error:', e.message); }
+
+    const r = await client.signAndExecuteTransaction({
+      signer: keypair,
+      transaction: tx,
+      options: { showEffects: true, showEvents: true },
+    });
+
+    if (r.effects?.status?.status === 'success') {
+      console.log(`  ✅ Harvest complete — tx: ${r.digest}`);
+      for (const ev of r.events ?? []) {
+        if (ev.type?.includes('Harvested')) {
+          const f = ev.parsedJson;
+          console.log(`     rewards: ${fmt(f?.rewards_mist)} SUI · principal: ${fmt(f?.total_principal)} SUI`);
+        }
+        if (ev.type?.includes('YieldDeposited')) {
+          const f = ev.parsedJson;
+          console.log(`     → Spark: ${fmt(f?.spark_mist)} · Pulse: ${fmt(f?.pulse_mist)} · Surge: ${fmt(f?.surge_mist)} SUI`);
+        }
+      }
+    } else {
+      console.error('  ❌ Harvest failed:', r.effects?.status?.error);
+    }
+  } catch (e) {
+    console.error('  ❌ Harvest error:', e.message);
+  }
 }
+
+// ── Draw Registration + Trigger ───────────────────────────────────────────────
 
 async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   const names = ['Spark', 'Pulse', 'Surge'];
   const registerFn = ['register_spark_tickets', 'register_pulse_tickets', 'register_surge_tickets'];
-  const triggerFn  = ['trigger_spark', 'trigger_pulse', 'trigger_surge'];
+  const triggerFn  = ['trigger_spark',          'trigger_pulse',          'trigger_surge'];
   const name = names[drawType];
 
   if (Object.keys(stakers).length === 0) {
@@ -176,13 +229,11 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
       const suiAmt = Number(amtMist) / 1e9;
       let tickets;
       if (drawType === 0) {
-        tickets = Math.min(Math.floor(suiAmt), 500);
+        tickets = suiAmt >= 1 ? 1 : 0; // Spark: equal odds
       } else if (drawType === 1) {
-        tickets = suiAmt < 50 ? 0
-          : suiAmt <= 1000 ? Math.floor(suiAmt)
-          : Math.floor(1000 + Math.sqrt(suiAmt - 1000));
+        tickets = suiAmt < 10 ? 0 : Math.max(1, Math.floor(Math.sqrt(suiAmt))); // Pulse: sqrt
       } else {
-        tickets = suiAmt < 200 ? 0 : Math.floor(suiAmt);
+        tickets = suiAmt < 50 ? 0 : Math.max(1, Math.floor(Math.sqrt(suiAmt))); // Surge: sqrt
       }
 
       if (tickets > 0) {
@@ -205,18 +256,23 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
         tx.object(REWARD_POOL),
         tx.object(POOL_ADMIN_CAP),
         tx.object(SUI_RANDOM),
-        tx.object('0x6'),
+        tx.object(SUI_CLOCK),
         tx.object(ADMIN_CAP_DRAW),
       ],
     });
 
-    const r = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx, options: { showEffects: true, showEvents: true } });
+    const r = await client.signAndExecuteTransaction({
+      signer: keypair,
+      transaction: tx,
+      options: { showEffects: true, showEvents: true },
+    });
+
     if (r.effects?.status?.status === 'success') {
       console.log(`  ✅ ${name} draw complete — tx: ${r.digest}`);
       for (const ev of r.events ?? []) {
         if (ev.type?.includes('PrizeAwarded')) {
           const f = ev.parsedJson;
-          console.log(`  🏆 Winner: ${f?.winner} → ${(Number(f?.amount_mist ?? 0)/1e9).toFixed(4)} SUI`);
+          console.log(`  🏆 Winner: ${f?.winner} → ${fmt(f?.amount_mist)} SUI`);
         }
       }
     } else {
@@ -227,28 +283,41 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   }
 }
 
+// ── Tick ──────────────────────────────────────────────────────────────────────
+
 async function tick(client, keypair) {
   const now = BigInt(Date.now());
   console.log(`\n⏰ [${new Date().toISOString()}] Tick`);
 
-  const vault = await fetchVault(client);
-  if (!vault) { console.error('  ❌ Vault not found'); return; }
-
-  const fmt = n => (Number(n)/1e9).toFixed(4);
-  console.log(`  🏦 Vault — staked: ${fmt(vault.totalStaked)} SUI · pending yield: ${fmt(vault.pendingYield)} SUI`);
-
-  // Harvest immediately if there's any yield
-  if (vault.pendingYield > 0n) {
-    await harvestYield(client, keypair, vault.pendingYield);
+  // StakingVault (real Triton)
+  const sv = await fetchStakingVault(client);
+  if (sv) {
+    console.log(`  🏦 StakingVault — staked: ${fmt(sv.totalPrincipal)} SUI · rewards: ${fmt(sv.pendingRewards)} SUI · liquid: ${fmt(sv.liquidPrincipal)} SUI`);
+  } else {
+    console.error('  ❌ StakingVault not found');
+    return;
   }
 
+  // Legacy vault (drain phase — show but don't harvest simulated yield)
+  const lv = await fetchLegacyVault(client);
+  if (lv && lv.totalStaked > 0n) {
+    console.log(`  🏛️  LegacyVault — staked: ${fmt(lv.totalStaked)} SUI (idle, awaiting drain)`);
+  }
+
+  // Harvest real Triton rewards every tick (safe even if rewards = 0)
+  if (sv.totalPrincipal > 0n) {
+    await harvestStaking(client, keypair, sv.pendingRewards);
+  }
+
+  // Pool balances
   const balances = await fetchPoolBalances(client);
   if (balances) {
     console.log(`  💰 Pools — Spark: ${fmt(balances.spark)} · Pulse: ${fmt(balances.pulse)} · Surge: ${fmt(balances.surge)} SUI`);
   }
 
+  // Draw times + stakers
   const drawTimes = await fetchDrawState(client);
-  const stakers = await fetchStakers(client);
+  const stakers = await fetchStakingStakers(client);
 
   const checks = [
     { type: 0, name: 'Spark', icon: '⚡', next: drawTimes.nextSparkMs, bal: balances?.spark },
@@ -271,15 +340,19 @@ async function tick(client, keypair) {
   }
 }
 
-async function main() {
-  console.log('🌊 Surge Crank v5 — Production');
-  console.log(`   Network:  ${NETWORK}`);
-  console.log(`   Package:  ${PACKAGE_ID.slice(0,10)}...`);
-  console.log(`   Interval: ${POLL_MS/1000/60} minutes (harvest after each potential draw)`);
+// ── Main ──────────────────────────────────────────────────────────────────────
 
-  if (!PACKAGE_ID || !DRAW_STATE || !REWARD_POOL || !VAULT || !ADMIN_CAP_DRAW || !POOL_ADMIN_CAP || !VAULT_ADMIN_CAP) {
-    console.error('❌ Missing env vars — check .env');
-    console.error('   Required: PACKAGE_ID, DRAW_STATE, REWARD_POOL, VAULT, ADMIN_CAP_DRAW, POOL_ADMIN_CAP, VAULT_ADMIN_CAP');
+async function main() {
+  console.log('🌊 Surge Crank v6 — Real Triton Staking');
+  console.log(`   Network:  ${NETWORK}`);
+  console.log(`   Package:  ${PACKAGE_ID.slice(0, 10)}...`);
+  console.log(`   Vault:    ${STAKING_VAULT.slice(0, 10)}...`);
+  console.log(`   Interval: ${POLL_MS / 1000 / 60} minutes`);
+
+  const required = { PACKAGE_ID, STAKING_VAULT, DRAW_STATE, REWARD_POOL, ADMIN_CAP_DRAW, POOL_ADMIN_CAP, VAULT_ADMIN_CAP };
+  const missing = Object.entries(required).filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length > 0) {
+    console.error('❌ Missing env vars:', missing.join(', '));
     process.exit(1);
   }
 
