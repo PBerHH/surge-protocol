@@ -81,7 +81,7 @@ Package uses `compatible` upgrades — bugs can be fixed, but existing structs a
 │              Sui Mainnet Contracts (V6)          │
 │                                                  │
 │  StakingVault  ──→  Triton One Validator         │
-│  (real yield)        (2–3% APY)                  │
+│  (real yield)        (~1.5% APY)                  │
 │       │                                          │
 │       └──→  reward_pool  ◄──  draw_manager       │
 │             (prize pools)     (sui::random VRF)  │

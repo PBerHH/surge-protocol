@@ -99,7 +99,7 @@ V6. The contract has been upgraded several times since launch, each time transpa
 ## Contact & Support
 
 - **Website:** [surgeonsui.com](https://surgeonsui.com)
-- **GitHub:** [github.com/surge-dev/surge-protocol](https://github.com/surge-dev/surge-protocol)
+- **GitHub:** [github.com/PBerHH/surge-protocol](https://github.com/PBerHH/surge-protocol)
 
 ---
 
