@@ -110,7 +110,7 @@ async function postStats() {
     const surge = fmt(pf.surge_pool?.fields?.value ?? pf.surge_pool ?? 0);
 
     const msg =
-      `📊 <b>Surge Protocol — Hourly Stats</b>\n\n` +
+      `📊 <b>Surge Protocol — Daily Stats</b>\n\n` +
       `🏦 TVL: <b>${tvl} SUI</b> (staked at Triton One)\n` +
       `🌾 Pending rewards: ${rewards} SUI\n\n` +
       `<b>Prize Pools</b>\n` +
