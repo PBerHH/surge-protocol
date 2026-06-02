@@ -47,6 +47,7 @@ function shortAddr(addr) {
 
 // Track last seen event cursor to avoid duplicate alerts
 let lastEventCursor = null;
+let whaleEventCursor = null;
 
 async function checkNewWinners() {
   try {
@@ -90,6 +91,34 @@ async function checkNewWinners() {
   } catch (e) {
     console.error('Error checking winners:', e.message);
   }
+}
+
+
+async function checkWhaleStakes() {
+  try {
+    const [e1, e2] = await Promise.all([
+      client.queryEvents({ query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Staked` }, limit: 10, order: 'descending' }),
+      client.queryEvents({ query: { MoveEventType: `${PACKAGE_TYPE_ID}::stake_vault::Staked` }, limit: 10, order: 'descending' }),
+    ]);
+    const events = [...e1.data, ...e2.data];
+    if (events.length === 0) return;
+    const newest = events[0].id?.txDigest;
+    if (whaleEventCursor === newest) return;
+    const newEvents = whaleEventCursor ? events.filter(e => e.id?.txDigest !== whaleEventCursor) : [];
+    whaleEventCursor = newest;
+    if (newEvents.length === 0) return;
+    for (const ev of newEvents) {
+      const f = ev.parsedJson;
+      if (!f || !f.staker || !f.amount_mist) continue;
+      const sui = Number(BigInt(f.amount_mist)) / 1e9;
+      if (sui >= 100) {
+        const msg = `🐋 <b>Whale Alert!</b>\n\n` +
+          `<code>${f.staker.slice(0,8)}...${f.staker.slice(-4)}</code> just staked <b>${sui.toFixed(0)} SUI</b>\n` +
+          `\n🌊 <a href="https://surgeonsui.com">surgeonsui.com</a>`;
+        await sendMessage(msg);
+      }
+    }
+  } catch (e) { console.error('Whale check error:', e.message); }
 }
 
 async function postStats() {
@@ -153,6 +182,7 @@ async function main() {
 
   // Poll for new winners every minute
   setInterval(() => checkNewWinners().catch(console.error), POLL_MS);
+  setInterval(() => checkWhaleStakes().catch(console.error), 300_000);
 
   // Post stats every hour
   setInterval(() => postStats().catch(console.error), STATS_INTERVAL);
