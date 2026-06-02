@@ -109,15 +109,16 @@ async function fetchPoolBalances(client) {
   };
 }
 
-/// Query Staked events from the new StakingVault (V5+).
-/// Uses PACKAGE_ID (current published-at) — updated on each upgrade via fly secrets.
+/// Query Staked events from the new StakingVault (V5+V6).
 async function fetchStakingStakers(client) {
   try {
-    const events = await client.queryEvents({
-      query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Staked` },
-      limit: 100,
-    });
-    console.log(`  📋 Found ${events.data.length} stake events (new vault)`);
+    const PACKAGE_V5 = '0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb';
+    const [e1, e2] = await Promise.all([
+      client.queryEvents({ query: { MoveEventType: `${PACKAGE_V5}::stake_vault::Staked` }, limit: 100 }),
+      client.queryEvents({ query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Staked` }, limit: 100 }),
+    ]);
+    const events = { data: [...e1.data, ...e2.data] };
+    console.log(`  📋 Found ${events.data.length} stake events (V5+V6)`);
     const stakers = {};
     for (const ev of events.data) {
       const fields = ev.parsedJson;
@@ -298,10 +299,27 @@ async function tick(client, keypair) {
     return;
   }
 
-  // Legacy vault (drain phase — show but don't harvest simulated yield)
+  // Legacy vault — harvest pending_yield into reward pool
   const lv = await fetchLegacyVault(client);
-  if (lv && lv.totalStaked > 0n) {
-    console.log(`  🏛️  LegacyVault — staked: ${fmt(lv.totalStaked)} SUI (idle, awaiting drain)`);
+  if (lv && lv.pendingYield > 0n) {
+    console.log(`  🏛️  LegacyVault — pending yield: ${fmt(lv.pendingYield)} SUI — harvesting...`);
+    try {
+      const tx = new Transaction();
+      const [coin] = tx.moveCall({
+        target: `${PACKAGE_ID}::stake_vault::harvest_yield`,
+        arguments: [tx.object(VAULT), tx.object(VAULT_ADMIN_CAP)],
+      });
+      tx.moveCall({
+        target: `${PACKAGE_ID}::reward_pool::deposit_yield`,
+        arguments: [tx.object(REWARD_POOL), coin, tx.object(POOL_ADMIN_CAP)],
+      });
+      const res = await client.signAndExecuteTransaction({ signer: keypair, transaction: tx });
+      console.log(`  ✅ Legacy harvest — tx: ${res.digest}`);
+    } catch (e) {
+      console.error('  ⚠️ Legacy harvest failed:', e.message);
+    }
+  } else if (lv && lv.totalStaked > 0n) {
+    console.log(`  🏛️  LegacyVault — staked: ${fmt(lv.totalStaked)} SUI (no pending yield)`);
   }
 
   // Harvest real Triton rewards every tick (safe even if rewards = 0)

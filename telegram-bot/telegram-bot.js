@@ -13,7 +13,7 @@ const REWARD_POOL      = process.env.REWARD_POOL        ?? '';
 const NETWORK          = process.env.NETWORK            ?? 'mainnet';
 
 const POLL_MS          = 60_000;   // check for new events every minute
-const STATS_INTERVAL   = 3600_000; // post stats every hour
+const STATS_INTERVAL   = 86_400_000; // post stats once per day
 
 if (!TELEGRAM_TOKEN || !CHAT_ID || !PACKAGE_ID) {
   console.error('❌ Missing env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, PACKAGE_ID');
