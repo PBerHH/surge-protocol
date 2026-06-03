@@ -179,6 +179,7 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const [suiPrice, setSuiPrice] = useState(null);
   const [lastWinners, setLastWinners] = useState([]);
+  const [expandedDraw, setExpandedDraw] = useState(null);
   const [myWinnings, setMyWinnings] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [userPoints, setUserPoints] = useState(null);
@@ -210,11 +211,17 @@ export default function App() {
 
   const fetchLastWinners = useCallback(async () => {
     try {
-      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'draw_manager' } }, limit: 20, order: 'descending' });
+      const [ev5, ev6] = await Promise.all([
+        client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'draw_manager' } }, limit: 50, order: 'descending' }),
+        client.queryEvents({ query: { MoveModule: { package: PACKAGE, module: 'draw_manager' } }, limit: 50, order: 'descending' }),
+      ]);
+      const events = { data: [...ev6.data, ...ev5.data] };
       const winners = events.data.filter(e => e.type?.includes('PrizeAwarded') && Number(e.parsedJson?.amount_mist) > 0)
-        .map(e => ({ winner: e.parsedJson.winner, amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs }));
-      if (prevWinnersRef.current.length > 0 && winners.length > 0 && winners[0]?.ts !== prevWinnersRef.current[0]?.ts) launchConfetti();
-      prevWinnersRef.current = winners;
+        .map(e => ({ winner: e.parsedJson.winner, amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs, tx: e.id?.txDigest }))
+        .sort((a, b) => Number(b.ts) - Number(a.ts));
+      const newestTx = winners[0]?.tx;
+      if (prevWinnersRef.current && newestTx && newestTx !== prevWinnersRef.current && Number(winners[0]?.ts) > Date.now() - 60000) launchConfetti();
+      prevWinnersRef.current = newestTx;
       setLastWinners(winners);
     } catch (e) { console.error(e); }
   }, [client]);
@@ -288,7 +295,11 @@ export default function App() {
   const fetchMyWinnings = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'draw_manager' } }, limit: 50, order: 'descending' });
+      const [ev5, ev6] = await Promise.all([
+        client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'draw_manager' } }, limit: 50, order: 'descending' }),
+        client.queryEvents({ query: { MoveModule: { package: PACKAGE, module: 'draw_manager' } }, limit: 50, order: 'descending' }),
+      ]);
+      const events = { data: [...ev6.data, ...ev5.data] };
       setMyWinnings(events.data.filter(e => e.type?.includes('PrizeAwarded') && e.parsedJson?.winner === account.address)
         .map(e => ({ amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs })));
     } catch (e) { console.error(e); }
@@ -821,21 +832,46 @@ export default function App() {
         {/* Tab: Winners */}
         {activeTab === "winners" && (
           <section className="panel">
-            <div className="panel-title">🏆 Recent Winners</div>
+            <div className="panel-title">🏆 Recent Draws</div>
             {lastWinners.length === 0
               ? <div style={{ fontSize: 12, fontFamily: "'DM Mono',monospace", color: "var(--text3)", padding: "1rem 0" }}>No draws yet on this contract.</div>
-              : lastWinners.map((w, i) => (
-                <div className="position-row" key={i}>
-                  <div>
-                    <div className="pos-amount" style={{ fontSize: "0.85rem" }}>
-                      <span style={{ color: w.pool === 'Spark' ? '#F5C842' : w.pool === 'Pulse' ? '#3ABFAA' : '#C67FE8', marginRight: 8 }}>{w.pool === 'Spark' ? '⚡' : w.pool === 'Pulse' ? '🔄' : '🌊'} {w.pool}</span>
-                      <span style={{ color: 'rgba(255,255,255,0.4)', fontFamily: 'DM Mono, monospace', fontSize: '0.75rem' }}>{w.winner.slice(0, 6)}...{w.winner.slice(-4)}</span>
-                    </div>
-                    <div className="pos-status">{new Date(Number(w.ts)).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
-                  </div>
-                  <div style={{ fontFamily: 'DM Mono, monospace', color: '#3ABFAA', fontWeight: 600 }}>+{w.amount.toFixed(4)} SUI</div>
-                </div>
-              ))
+              : (() => {
+                  const sorted = [...lastWinners].sort((a,b) => Number(b.ts) - Number(a.ts));
+                  const groups = [];
+                  const seen = {};
+                  for (const w of sorted) {
+                    const key = w.tx || (w.pool + w.ts);
+                    if (!seen[key]) { seen[key] = true; groups.push({ key, pool: w.pool, ts: w.ts, tx: w.tx, winners: [] }); }
+                    groups.find(g => g.key === key).winners.push(w);
+                  }
+                  return groups.slice(0,15).map((g, i) => {
+                    const color = g.pool === 'Spark' ? '#F5C842' : g.pool === 'Pulse' ? '#3ABFAA' : '#C67FE8';
+                    const icon = g.pool === 'Spark' ? '⚡' : g.pool === 'Pulse' ? '🔄' : '🌊';
+                    const total = g.winners.reduce((s,w) => s + w.amount, 0);
+                    const [open, setOpen] = [expandedDraw === g.key, (v) => setExpandedDraw(v ? g.key : null)];
+                    return (
+                      <div key={i} style={{ borderBottom: '0.5px solid var(--border2)', paddingBottom: 8, marginBottom: 8 }}>
+                        <div onClick={() => setOpen(!open)} style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
+                          <div>
+                            <span style={{ color, marginRight: 8 }}>{icon} {g.pool}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem' }}>{new Date(Number(g.ts)).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {g.winners.length} winners</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontFamily: 'DM Mono, monospace', color: '#3ABFAA', fontWeight: 600 }}>{total.toFixed(4)} SUI</span>
+                            {g.tx && <a href={`https://suiscan.xyz/mainnet/tx/${g.tx}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.3)', textDecoration: 'none', border: '0.5px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '2px 6px' }}>↗</a>}
+                            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>{open ? '▲' : '▼'}</span>
+                          </div>
+                        </div>
+                        {open && g.winners.map((w, j) => (
+                          <div key={j} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 12px', fontSize: '0.8rem' }}>
+                            <span style={{ color: 'rgba(255,255,255,0.4)', fontFamily: 'DM Mono, monospace' }}>↳ {w.winner.slice(0,6)}...{w.winner.slice(-4)}</span>
+                            <span style={{ color: '#3ABFAA', fontFamily: 'DM Mono, monospace' }}>+{w.amount.toFixed(4)} SUI</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  });
+                })()
             }
           </section>
         )}
