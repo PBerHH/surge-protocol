@@ -210,7 +210,7 @@ export default function App() {
 
   const fetchLastWinners = useCallback(async () => {
     try {
-      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'reward_pool' } }, limit: 20, order: 'descending' });
+      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'draw_manager' } }, limit: 20, order: 'descending' });
       const winners = events.data.filter(e => e.type?.includes('PrizeAwarded') && Number(e.parsedJson?.amount_mist) > 0)
         .map(e => ({ winner: e.parsedJson.winner, amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs }));
       if (prevWinnersRef.current.length > 0 && winners.length > 0 && winners[0]?.ts !== prevWinnersRef.current[0]?.ts) launchConfetti();
@@ -288,7 +288,7 @@ export default function App() {
   const fetchMyWinnings = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'reward_pool' } }, limit: 50, order: 'descending' });
+      const events = await client.queryEvents({ query: { MoveModule: { package: PACKAGE_TYPE, module: 'draw_manager' } }, limit: 50, order: 'descending' });
       setMyWinnings(events.data.filter(e => e.type?.includes('PrizeAwarded') && e.parsedJson?.winner === account.address)
         .map(e => ({ amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs })));
     } catch (e) { console.error(e); }

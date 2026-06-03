@@ -41,17 +41,8 @@ async function fetchAllStakers() {
   
   let allEvents = [];
 
-  // Query old Deposited events (legacy vault, for historical points)
+  // Legacy Deposited events skipped
   let cursor = null;
-  while (true) {
-    const result = await sui.queryEvents({
-      query: { MoveEventType: `${PACKAGE_TYPE_ID}::stake_vault::Deposited` },
-      limit: 50, cursor,
-    });
-    allEvents = allEvents.concat(result.data.map(e => ({ ...e, _eventType: 'legacy' })));
-    if (!result.hasNextPage) break;
-    cursor = result.nextCursor;
-  }
 
   // Query new Staked events (real StakingVault, Triton) — V5 + V6
   const PACKAGE_V5 = '0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb';
@@ -202,7 +193,7 @@ async function calculateAndUpdatePoints() {
     }
     
   } catch (e) {
-    console.error('❌ Points calculation error:', e.message);
+    console.error('❌ Points calculation error:', e.message, e.stack);
   }
 }
 
