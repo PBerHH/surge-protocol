@@ -12,6 +12,14 @@ const VAULT       = "0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8a
 const DRAW_STATE  = "0xee9f68a29ab16442600a9e12426431b240aed97cdf5108f44d8325401cc25fb0";
 const REWARD_POOL = "0xacf68b636a55c96a8269ab0b66d735a7bbfadf058821cc17f97bc32d49d6968f";
 
+// ── V6 (haSUI yield engine — live on mainnet, primary stake target) ─────────
+const V6_PACKAGE = "0xaf489faa2a23db82265e25c833f2cf9b985eb0a8d4acde121c7e14c111c3b62e";
+const V6_VAULT   = "0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5";
+// Haedal (verified on mainnet): types/events live in ORIG, calls route to LATEST
+const HAEDAL_STAKING    = "0x47b224762220393057ebf4f70501b6e657c3e56684737568439a04f80849b2ca";
+const HAEDAL_PKG_ORIG   = "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d";
+const HAEDAL_PKG_LATEST = "0x126e4cfb051cad744706df590ec399e8c02b6feae195c35b8b496280d5442a62";
+
 // ── Legacy Contracts (withdraw-only — let old depositors recover their SUI) ──
 const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
 const LEGACY_VAULT    = "0x0aa9c18818087b3e9e32c6eef8f3b17ce98670d5ac00eb54fd559d0d98db76be";
@@ -116,6 +124,9 @@ export default function App() {
   const [poolData, setPoolData] = useState(null);
   const [drawData, setDrawData] = useState(null);
   const [vaultData, setVaultData] = useState(null);
+  const [v6VaultData, setV6VaultData] = useState(null);
+  const [v6Receipts, setV6Receipts] = useState([]);
+  const [haTickets, setHaTickets] = useState([]);
   const [stakeAmount, setStakeAmount] = useState("100");
   const [txStatus, setTxStatus] = useState(null);
   const [userReceipts, setUserReceipts] = useState([]);
@@ -135,14 +146,16 @@ export default function App() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [pool, draw, vault] = await Promise.all([
+      const [pool, draw, vault, v6vault] = await Promise.all([
         client.getObject({ id: REWARD_POOL, options: { showContent: true } }),
         client.getObject({ id: DRAW_STATE, options: { showContent: true } }),
         client.getObject({ id: VAULT, options: { showContent: true } }),
+        client.getObject({ id: V6_VAULT, options: { showContent: true } }),
       ]);
       if (pool.data?.content?.fields) setPoolData(pool.data.content.fields);
       if (draw.data?.content?.fields) setDrawData(draw.data.content.fields);
       if (vault.data?.content?.fields) setVaultData(vault.data.content.fields);
+      if (v6vault.data?.content?.fields) setV6VaultData(v6vault.data.content.fields);
     } catch (e) { console.error(e); }
   }, [client]);
 
@@ -167,6 +180,10 @@ export default function App() {
     try {
       const res = await Promise.all([PACKAGE, PKG_CALL].map(pkg => client.getOwnedObjects({ owner: account.address, filter: { StructType: `${pkg}::stake_vault::StakingReceipt` }, options: { showContent: true } })));
       setUserReceipts(res.flatMap(r => r.data).map(o => o.data?.content?.fields).filter(Boolean));
+      const v6res = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${V6_PACKAGE}::stake_vault_v6::StakeReceiptV6` }, options: { showContent: true } });
+      setV6Receipts(v6res.data.map(o => o.data?.content?.fields).filter(Boolean));
+      const tix = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${HAEDAL_PKG_ORIG}::staking::UnstakeTicket` }, options: { showContent: true } });
+      setHaTickets(tix.data.map(o => ({ id: o.data?.objectId })).filter(t => t.id));
     } catch (e) { console.error(e); }
   }, [account, client]);
 
@@ -222,7 +239,10 @@ export default function App() {
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      const res = await Promise.all([PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveEventType: `${pkg}::stake_vault::Staked` }, limit: 50 })));
+      const res = await Promise.all([
+        ...[PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveEventType: `${pkg}::stake_vault::Staked` }, limit: 50 })),
+        client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::StakedV6` }, limit: 50 }).then(r => ({ data: r.data.map(ev => ({ ...ev, parsedJson: { staker: ev.parsedJson?.owner, amount_mist: ev.parsedJson?.principal_mist } })) })),
+      ]);
       const events = { data: res.flatMap(r => r.data) };
       const stakes = {};
       for (const ev of events.data) {
@@ -250,10 +270,11 @@ export default function App() {
       tx.setGasPrice(1000);
       const [coin] = tx.splitCoins(tx.gas, [amt]);
       tx.moveCall({
-        target: `${PKG_CALL}::stake_vault::stake`,
+        target: `${V6_PACKAGE}::stake_vault_v6::stake`,
         arguments: [
-          tx.object(VAULT),
+          tx.object(V6_VAULT),
           tx.sharedObjectRef({ objectId: "0x0000000000000000000000000000000000000000000000000000000000000005", initialSharedVersion: 1, mutable: true }), // SuiSystemState
+          tx.object(HAEDAL_STAKING),
           coin,
           tx.object("0x6"), // Clock
         ],
@@ -263,6 +284,38 @@ export default function App() {
         onError: (e) => setTxStatus({ type: "error", msg: e.message }),
       });
     } catch (e) { setTxStatus({ type: "error", msg: e.message }); }
+  }
+
+  async function handleUnstakeV6(receiptId) {
+    setTxStatus({ type: "pending", msg: "Requesting unstake..." });
+    const tx = new Transaction();
+    tx.setGasPrice(1000);
+    tx.moveCall({
+      target: `${V6_PACKAGE}::stake_vault_v6::request_unstake`,
+      arguments: [tx.object(V6_VAULT), tx.object(HAEDAL_STAKING), tx.object(receiptId), tx.object("0x6")],
+    });
+    signAndExecute({ transaction: tx }, {
+      onSuccess: () => { setTxStatus({ type: "success", msg: "Unstake started — your SUI redemption ticket appears below, claimable after 1–2 epochs (~1–2 days)" }); setTimeout(fetchReceipts, 3000); },
+      onError: (e) => setTxStatus({ type: "error", msg: e.message }),
+    });
+  }
+
+  async function handleClaimTicket(ticketId) {
+    setTxStatus({ type: "pending", msg: "Claiming redemption..." });
+    const tx = new Transaction();
+    tx.setGasPrice(1000);
+    tx.moveCall({
+      target: `${HAEDAL_PKG_LATEST}::interface::claim_v2`,
+      arguments: [
+        tx.sharedObjectRef({ objectId: "0x0000000000000000000000000000000000000000000000000000000000000005", initialSharedVersion: 1, mutable: true }),
+        tx.object(HAEDAL_STAKING),
+        tx.object(ticketId),
+      ],
+    });
+    signAndExecute({ transaction: tx }, {
+      onSuccess: (r) => { setTxStatus({ type: "success", msg: `Claimed! Your SUI is back in your wallet. Tx: ${r.digest.slice(0,16)}...` }); setTimeout(() => { fetchReceipts(); fetchData(); }, 3000); },
+      onError: (e) => setTxStatus({ type: "error", msg: e.message?.includes("6)") ? "Not matured yet — redemption takes 1–2 epochs (~1–2 days). Try again later." : e.message }),
+    });
   }
 
   async function handleUnstake(receiptId) {
@@ -365,7 +418,7 @@ export default function App() {
   const sparkTickets = sui >= 1 ? 1 : 0;
   const pulseTickets = sui >= 10 ? Math.floor(Math.sqrt(sui)) : 0;
   const surgeTickets = sui >= 50 ? Math.floor(Math.sqrt(sui)) : 0;
-  const totalStaked = vaultData?.total_principal ?? 0;
+  const totalStaked = BigInt(vaultData?.total_principal ?? 0) + BigInt(v6VaultData?.total_principal ?? 0);
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
   const myStakeMist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
   const myStakeSui = myStakeMist / 1e9;
@@ -496,16 +549,41 @@ export default function App() {
               <div className="info-rows">
                 <div className="info-row"><span>Min. deposit</span><span>1 SUI</span></div>
                 <div className="info-row"><span>Draw entry</span><span>1 / 10 / 50 SUI</span></div>
-                <div className="info-row"><span>Unstake delay</span><span>1 epoch (~24h)</span></div>
+                <div className="info-row"><span>Unstake delay</span><span>1–2 epochs (~1–2 days)</span></div>
                 <div className="info-row"><span>Protocol fee</span><span>2% of yield</span></div>
                 <div className="info-row"><span>Randomness</span><span>sui::random (on-chain)</span></div>
               </div>
             </section>
           </div>
 
-          {account && userReceipts.length > 0 && (
+          {account && (v6Receipts.length > 0 || haTickets.length > 0) && (
             <section className="panel positions">
               <div className="panel-title">Your Stakes</div>
+              {v6Receipts.map((r, i) => (
+                <div className="position-row" key={`v6-${i}`}>
+                  <div>
+                    <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
+                    <div className="pos-status">✅ Active — earning since {r.deposit_ts_ms ? new Date(Number(r.deposit_ts_ms)).toLocaleDateString() : "now"}</div>
+                  </div>
+                  <button className="unstake-btn" onClick={() => handleUnstakeV6(r.id?.id)}>Unstake</button>
+                </div>
+              ))}
+              {haTickets.map((t, i) => (
+                <div className="position-row" key={`tix-${i}`}>
+                  <div>
+                    <div className="pos-amount">Redemption ticket</div>
+                    <div className="pos-status">⏳ Claimable after 1–2 epochs — returns your full principal</div>
+                  </div>
+                  <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }} onClick={() => handleClaimTicket(t.id)}>Claim</button>
+                </div>
+              ))}
+            </section>
+          )}
+
+          {account && userReceipts.length > 0 && (
+            <section className="panel positions" style={{ borderColor: "rgba(245,200,66,0.3)" }}>
+              <div className="panel-title" style={{ color: "#F5C842" }}>Your V5 Stakes (migrating)</div>
+              <p style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginBottom: "1rem" }}>The protocol upgraded to the v6 haSUI engine. Unstake + withdraw here, then re-stake above to keep earning tickets.</p>
               {userReceipts.map((r, i) => {
                 const unlockMs = r.unlock_ts_ms ? Number(r.unlock_ts_ms) : null;
                 const ready = unlockMs !== null && Date.now() >= unlockMs;
