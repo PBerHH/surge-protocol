@@ -410,7 +410,7 @@ export default function App() {
   }
 
   function handleShare() {
-    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_principal ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surge-protocol-chi.vercel.app`;
+    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_principal ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surgeonsui.com`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
   }
 
@@ -528,7 +528,7 @@ export default function App() {
               <button className="stake-btn" onClick={handleStake} disabled={!account || txStatus?.type === "pending"}>
                 {!account ? "Connect wallet to stake" : txStatus?.type === "pending" ? "Confirming..." : `Stake ${stakeAmount || "0"} SUI`}
               </button>
-              <p className="stake-note">Principal always protected · 1-epoch unstake · On-chain VRF</p>
+              <p className="stake-note">Principal always protected · 1-2 epoch unstake · On-chain VRF</p>
             </section>
 
             <section className="panel loyalty-panel">
