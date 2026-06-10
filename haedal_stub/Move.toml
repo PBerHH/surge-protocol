@@ -1,15 +1,12 @@
 [package]
-name = "surge"
-version = "0.3.0"
+name = "haedal"
+version = "0.0.1"
 edition = "2024.beta"
-upgrade-policy = "incompatible"
+published-at = "0x126e4cfb051cad744706df590ec399e8c02b6feae195c35b8b496280d5442a62"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
 SuiSystem = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-system", rev = "framework/mainnet" }
 
-haedal = { local = "./haedal_stub" }
-
 [addresses]
-surge = "0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3"
-sui_system = "0x3"
+haedal = "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d"

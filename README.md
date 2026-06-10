@@ -178,3 +178,7 @@ node crank.js
 ## Built for Sui Overflow 2026
 
 Surge Protocol was built for the Sui Overflow 2026 hackathon.
+
+## v6 architecture (in development)
+
+See [docs/v6-architecture.md](docs/v6-architecture.md) — LST-based yield engine, testnet-validated, audit planned before mainnet.
