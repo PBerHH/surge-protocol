@@ -125,6 +125,7 @@ export default function App() {
   const [drawData, setDrawData] = useState(null);
   const [vaultData, setVaultData] = useState(null);
   const [v6VaultData, setV6VaultData] = useState(null);
+  const [haRate, setHaRate] = useState(null);
   const [v6Receipts, setV6Receipts] = useState([]);
   const [haTickets, setHaTickets] = useState([]);
   const [stakeAmount, setStakeAmount] = useState("100");
@@ -156,6 +157,13 @@ export default function App() {
       if (draw.data?.content?.fields) setDrawData(draw.data.content.fields);
       if (vault.data?.content?.fields) setVaultData(vault.data.content.fields);
       if (v6vault.data?.content?.fields) setV6VaultData(v6vault.data.content.fields);
+      try {
+        const rtx = new Transaction();
+        rtx.moveCall({ target: `${HAEDAL_PKG_ORIG}::staking::get_exchange_rate`, arguments: [rtx.object(HAEDAL_STAKING)] });
+        const ins = await client.devInspectTransactionBlock({ sender: "0x0000000000000000000000000000000000000000000000000000000000000001", transactionBlock: rtx });
+        const bytes = ins?.results?.[0]?.returnValues?.[0]?.[0];
+        if (bytes) { let v = 0n; for (let i = bytes.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i]); setHaRate(v); }
+      } catch { /* rate unavailable — panel hides itself */ }
     } catch (e) { console.error(e); }
   }, [client]);
 
@@ -410,7 +418,7 @@ export default function App() {
   }
 
   function handleShare() {
-    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_principal ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surgeonsui.com`;
+    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_principal ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surge-protocol-chi.vercel.app`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
   }
 
@@ -509,6 +517,24 @@ export default function App() {
 
         {/* Tab: Stake */}
         {activeTab === "stake" && <>
+          {v6VaultData && haRate && (() => {
+            const principal = BigInt(v6VaultData.total_principal ?? 0);
+            const ha = BigInt(v6VaultData.ha_balance ?? 0);
+            const value = (ha * haRate) / 1000000n;
+            const accrued = value > principal ? value - principal : 0n;
+            return (
+              <section className="panel" style={{ marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "1.5rem", alignItems: "baseline", justifyContent: "space-between" }}>
+                <div className="panel-title" style={{ margin: 0 }}>🔍 Proof of Funds — live on-chain</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem", fontFamily: "'DM Mono',monospace", fontSize: "0.85rem" }}>
+                  <span>Principal <b>{fmt(principal, 4)} SUI</b></span>
+                  <span>Vault value <b>{fmt(value, 4)} SUI</b></span>
+                  <span style={{ color: "#3ABFAA" }}>Accrued yield <b>+{fmt(accrued, 6)} SUI</b></span>
+                  <span style={{ color: "rgba(255,255,255,0.4)" }}>haSUI rate {(Number(haRate) / 1e6).toFixed(6)}</span>
+                  <a href="https://suivision.xyz/object/0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5" target="_blank" rel="noreferrer" style={{ color: "#F5C842" }}>Verify ↗</a>
+                </div>
+              </section>
+            );
+          })()}
           <div className="two-col">
             <section className="panel stake-panel">
               <div className="panel-title">Deposit SUI</div>
@@ -528,7 +554,7 @@ export default function App() {
               <button className="stake-btn" onClick={handleStake} disabled={!account || txStatus?.type === "pending"}>
                 {!account ? "Connect wallet to stake" : txStatus?.type === "pending" ? "Confirming..." : `Stake ${stakeAmount || "0"} SUI`}
               </button>
-              <p className="stake-note">Principal always protected · 1-2 epoch unstake · On-chain VRF</p>
+              <p className="stake-note">Principal always protected · 1-epoch unstake · On-chain VRF</p>
             </section>
 
             <section className="panel loyalty-panel">
