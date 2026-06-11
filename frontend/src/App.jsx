@@ -19,6 +19,9 @@ const V6_VAULT   = "0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc
 const HAEDAL_STAKING    = "0x47b224762220393057ebf4f70501b6e657c3e56684737568439a04f80849b2ca";
 const HAEDAL_PKG_ORIG   = "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d";
 const HAEDAL_PKG_LATEST = "0x126e4cfb051cad744706df590ec399e8c02b6feae195c35b8b496280d5442a62";
+// Supabase (points) — paste the anon/public key from Supabase → Settings → API
+const SUPABASE_URL = "https://dqcjgvotffxutvgvahse.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxY2pndm90ZmZ4dXR2Z3ZhaHNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjI0MDQsImV4cCI6MjA5NDkzODQwNH0.J6m4cARii-VU3AQIotHY0i6hQC4HOXDZvvcE7MCyVC8";
 
 // ── Legacy Contracts (withdraw-only — let old depositors recover their SUI) ──
 const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
@@ -126,6 +129,7 @@ export default function App() {
   const [vaultData, setVaultData] = useState(null);
   const [v6VaultData, setV6VaultData] = useState(null);
   const [haRate, setHaRate] = useState(null);
+  const [pointsData, setPointsData] = useState(null);
   const [v6Receipts, setV6Receipts] = useState([]);
   const [haTickets, setHaTickets] = useState([]);
   const [stakeAmount, setStakeAmount] = useState("100");
@@ -247,21 +251,48 @@ export default function App() {
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      const res = await Promise.all([
-        ...[PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveEventType: `${pkg}::stake_vault::Staked` }, limit: 50 })),
-        client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::StakedV6` }, limit: 50 }).then(r => ({ data: r.data.map(ev => ({ ...ev, parsedJson: { staker: ev.parsedJson?.owner, amount_mist: ev.parsedJson?.principal_mist } })) })),
-      ]);
-      const events = { data: res.flatMap(r => r.data) };
+      // V5 events are gross (no per-amount unstake events) — only counted while the
+      // V5 vault still holds principal; after wind-down V6 net is the whole truth.
+      const v5Vault = await client.getObject({ id: VAULT, options: { showContent: true } });
+      const v5Active = BigInt(v5Vault.data?.content?.fields?.total_principal ?? 0) > 0n;
+      const queries = [
+        client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::StakedV6` }, limit: 50 }),
+        client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::UnstakedV6` }, limit: 50 }),
+      ];
+      if (v5Active) queries.push(...[PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveEventType: `${pkg}::stake_vault::Staked` }, limit: 50 })));
+      const [stakedV6, unstakedV6, ...v5res] = await Promise.all(queries);
       const stakes = {};
-      for (const ev of events.data) {
+      for (const ev of stakedV6.data) {
+        const f = ev.parsedJson;
+        if (f?.owner && f?.principal_mist) stakes[f.owner] = (stakes[f.owner] ?? 0n) + BigInt(f.principal_mist);
+      }
+      for (const ev of unstakedV6.data) {
+        const f = ev.parsedJson;
+        if (f?.owner && f?.principal_mist) stakes[f.owner] = (stakes[f.owner] ?? 0n) - BigInt(f.principal_mist);
+      }
+      for (const r of v5res) for (const ev of r.data) {
         const f = ev.parsedJson;
         if (f?.staker && f?.amount_mist) stakes[f.staker] = (stakes[f.staker] ?? 0n) + BigInt(f.amount_mist);
       }
+      for (const a of Object.keys(stakes)) { if (stakes[a] <= 0n) delete stakes[a]; }
       setLeaderboard(Object.entries(stakes).sort((a, b) => b[1] > a[1] ? 1 : -1).slice(0, 10).map(([addr, mist], i) => ({ rank: i + 1, addr, sui: Number(mist) / 1e9 })));
     } catch (e) { console.error(e); }
   }, [client]);
 
   useEffect(() => { fetchLeaderboard(); }, [fetchLeaderboard]);
+
+  useEffect(() => {
+    if (!account?.address || !SUPABASE_ANON_KEY) { setPointsData(null); return; }
+    (async () => {
+      try {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/wallets?address=eq.${account.address}&select=total_points,multiplier,early_bird_rank,pioneer_rank`, {
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        });
+        const rows = await r.json();
+        if (Array.isArray(rows) && rows[0]) setPointsData(rows[0]);
+      } catch { /* points unavailable — banner hides */ }
+    })();
+  }, [account?.address]);
 
   useEffect(() => {
     fetch("https://api.coingecko.com/api/v3/simple/price?ids=sui&vs_currencies=usd")
@@ -517,24 +548,22 @@ export default function App() {
 
         {/* Tab: Stake */}
         {activeTab === "stake" && <>
-          {v6VaultData && haRate && (() => {
-            const principal = BigInt(v6VaultData.total_principal ?? 0);
-            const ha = BigInt(v6VaultData.ha_balance ?? 0);
-            const value = (ha * haRate) / 1000000n;
-            const accrued = value > principal ? value - principal : 0n;
-            return (
-              <section className="panel" style={{ marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "1.5rem", alignItems: "baseline", justifyContent: "space-between" }}>
-                <div className="panel-title" style={{ margin: 0 }}>🔍 Proof of Funds — live on-chain</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "1.5rem", fontFamily: "'DM Mono',monospace", fontSize: "0.85rem" }}>
-                  <span>Principal <b>{fmt(principal, 4)} SUI</b></span>
-                  <span>Vault value <b>{fmt(value, 4)} SUI</b></span>
-                  <span style={{ color: "#3ABFAA" }}>Accrued yield <b>+{fmt(accrued, 6)} SUI</b></span>
-                  <span style={{ color: "rgba(255,255,255,0.4)" }}>haSUI rate {(Number(haRate) / 1e6).toFixed(6)}</span>
-                  <a href="https://suivision.xyz/object/0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5" target="_blank" rel="noreferrer" style={{ color: "#F5C842" }}>Verify ↗</a>
+          {pointsData && (
+            <section className="panel" style={{ marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "baseline", justifyContent: "space-between", borderColor: "rgba(245,200,66,0.35)" }}>
+              <div>
+                <div className="panel-title" style={{ margin: 0, color: "#F5C842" }}>
+                  {pointsData.early_bird_rank ? `🌟 Early Bird #${pointsData.early_bird_rank}` : pointsData.pioneer_rank ? `🏆 Pioneer #${pointsData.pioneer_rank}` : "👤 Points"}
                 </div>
-              </section>
-            );
-          })()}
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: "1.8rem", color: "#F5C842", marginTop: "0.3rem" }}>
+                  {Number(pointsData.total_points ?? 0).toFixed(2)} <span style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)" }}>pts</span>
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: "1.4rem", color: "#F5C842" }}>{Number(pointsData.multiplier ?? 1).toFixed(1)}x</div>
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: "0.65rem", textTransform: "uppercase", letterSpacing: "0.14em", color: "rgba(255,255,255,0.35)" }}>multiplier · forever</div>
+              </div>
+            </section>
+          )}
           <div className="two-col">
             <section className="panel stake-panel">
               <div className="panel-title">Deposit SUI</div>
@@ -729,17 +758,30 @@ export default function App() {
         )}
 
 
+        {/* Transparency strip */}
+        {v6VaultData && haRate && (() => {
+          const principal = BigInt(v6VaultData.total_principal ?? 0);
+          const ha = BigInt(v6VaultData.ha_balance ?? 0);
+          const value = (ha * haRate) / 1000000n;
+          const accrued = value > principal ? value - principal : 0n;
+          return (
+            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: "0.72rem", color: "rgba(255,255,255,0.35)", margin: "0 0 1.5rem", textAlign: "center" }}>
+              🔍 proof of funds: principal {fmt(principal, 4)} · vault value {fmt(value, 4)} · yield +{fmt(accrued, 6)} SUI · <a href="https://suivision.xyz/object/0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5" target="_blank" rel="noreferrer" style={{ color: "rgba(245,200,66,0.7)" }}>verify on-chain ↗</a>
+            </div>
+          );
+        })()}
+
         {/* FAQ */}
-        <section style={{ maxWidth: 800, margin: "0 auto", padding: "0 0 2rem" }}>
-          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.14em", color: "rgba(255,255,255,0.3)", marginBottom: "1rem" }}>FAQ</div>
+        <section className="panel" style={{ marginBottom: "2rem" }}>
+          <div className="panel-title">FAQ</div>
           {[
             { q: "Is my principal safe?", a: "Yes. Your deposited SUI is held in the vault. Only the staking yield goes into prize pools — your principal is never at risk." },
-            { q: "How does the prize pool get funded?", a: "Yield is harvested and split: 20% Spark, 30% Pulse, 50% Surge. 2% protocol fee deducted first." },
+            { q: "How does the prize pool get funded?", a: "Your stake is held as haSUI (Haedal liquid staking) and earns continuously. The yield is harvested and split: 20% Spark, 30% Pulse, ~48% Surge, 2% protocol fee. Harvest can mathematically never touch principal — coverage is enforced on-chain." },
             { q: "How are winners selected?", a: "Winners are chosen using sui::random — Sui's native on-chain verifiable randomness. No one can predict or manipulate the outcome." },
             { q: "How often are draws held?", a: "Spark every 6h (3 winners), Pulse weekly (4 winners), Surge monthly (1 jackpot). Fully automated." },
-            { q: "What is the unstake delay?", a: "1 epoch (~24 hours). After requesting unstake you wait one epoch, then withdraw your full principal." },
+            { q: "What is the unstake delay?", a: "1-2 epochs (~1-2 days) via Haedal's native redemption. You receive a redemption ticket on unstake; once matured, claim your full principal — exact rate, no fee." },
             { q: "What is the minimum deposit?", a: "1 SUI minimum to deposit, which also enters you into Spark draws. Pulse draws need 10 SUI, Surge draws 50 SUI." },
-            { q: "Is the contract audited?", a: "Built for Sui Overflow 2026, open source on GitHub. Security fixes include AdminCap protection and on-chain VRF. Formal audit planned post-hackathon." },
+            { q: "Is the contract audited?", a: "Not yet — Surge is early and unaudited. Open source on GitHub, every number verifiable on-chain, principal coverage enforced by the contract. Formal audit planned before external TVL scales. Stake only what you'd put into an experiment." },
           ].map((item, i) => (
             <div key={i} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", overflow: "hidden" }}>
               <button onClick={() => setOpenFaq(openFaq === i ? null : i)} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1rem 0", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
