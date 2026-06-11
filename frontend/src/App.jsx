@@ -795,7 +795,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <span>Surge Protocol · Sui Mainnet · V3</span>
+        <span>Surge Protocol · Sui Mainnet · v6 engine</span>
         <a href="https://github.com/PBerHH/surge-protocol" target="_blank" rel="noreferrer">GitHub ↗</a>
       </footer>
     </div>
