@@ -71,7 +71,7 @@ Validated against Haedal's live testnet deployment
 | `stake` 1 SUI → haSUI locked in vault | ✅ Haedal `UserStaked` + `StakedV6` events | `CLFsBfeQVRXPUxt1ALscwGSejT8j8CZtPNFVqZUPD6ez` |
 | `request_unstake` → native redemption ticket | ✅ Haedal `UserNormalUnstaked` + `UnstakedV6` | `CuBKaNnTNvpM56pY6Bt69a44rqrJuKsPwZtrN1jBcZdU` |
 | `harvest` with zero yield | ✅ correctly aborts (`E_NOTHING_TO_HARVEST`) | `DN16WseSe6Dq…` |
-| `claim_v2` after maturity → SUI returned | ✅ | _(added after claim)_ |
+| `claim_v2` after maturity → SUI returned | ✅ exactly 1 SUI principal returned | `4UYmCjvGm7rxSgSk623AXtuSdAjuaWLZfp98SwWFHV7U` |
 
 Unit tests: `sui move test v6` — 7/7 passing, covering ceiling-rounding
 no-loss properties, harvest coverage invariants, dust thresholds, full
