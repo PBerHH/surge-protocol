@@ -16,9 +16,9 @@ Think of it like a savings account where instead of earning interest, you get lo
 
 ## How it works
 
-1. **Stake SUI** — deposit into the Surge vault (minimum 1 SUI), delegated to Triton One
+1. **Stake SUI** — deposit into the Surge vault (minimum 1 SUI), converted atomically into **haSUI** (Haedal liquid staking) — earning from the second it arrives
 2. **Earn tickets** — Spark gives 1 ticket per wallet (equal odds); Pulse and Surge scale with stake (√stake × loyalty)
-3. **Yield funds prizes** — ~1.5% APY validator yield is harvested each epoch and split into prize pools
+3. **Yield funds prizes** — haSUI appreciation (~2–2.5% APY staking yield) is harvested and split into prize pools; harvest mathematically cannot touch principal (coverage enforced on-chain)
 4. **Draws happen automatically** — a team-operated crank triggers draws on-chain
 5. **Winners are paid** — directly to their wallet, no claiming needed
 
@@ -91,7 +91,7 @@ On the roadmap to reduce trust: on-chain ticket derivation, permissionless draw 
 │              Sui Mainnet Contracts               │
 │                                                  │
 │  stake_vault    ──→  reward_pool                 │
-│  (Triton stake)      (prize pools)               │
+│  (haSUI vault)       (prize pools)               │
 │       │                    │                     │
 │       └──→  draw_manager ◄─┘                     │
 │             (sui::random)                        │
@@ -102,7 +102,7 @@ On the roadmap to reduce trust: on-chain ticket derivation, permissionless draw 
 ┌──────────────────▼──────────────────────────────┐
 │              Crank (Node.js)                     │
 │              Fly.io — surge-crank                │
-│  - Harvests real Triton validator yield/epoch    │
+│  - Harvests haSUI appreciation (yield only)      │
 │  - Routes yield → reward pool (2% fee on-chain)  │
 │  - Registers tickets for stakers                 │
 │  - Triggers draws when due                       │
@@ -115,7 +115,9 @@ On the roadmap to reduce trust: on-chain ticket derivation, permissionless draw 
 
 | Object | Address |
 |--------|---------|
-| Package (latest, for calls) | `0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c` |
+| **v6 package (live yield engine)** | `0xaf489faa2a23db82265e25c833f2cf9b985eb0a8d4acde121c7e14c111c3b62e` |
+| **v6 vault (haSUI)** | `0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5` |
+| Package (V5, winding down) | `0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c` |
 | Package (original-id) | `0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3` |
 | StakingVault (V5, real staking) | `0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8ab702562` |
 | Legacy Vault (drain-only) | `0x4bca5b44fcbb3cf79f3586c3ff4e4d3494975f1d8434de067a9a95b792150992` |
@@ -132,7 +134,7 @@ Upgrade policy: team-held `UpgradeCap`, compatible-style upgrades (logic can cha
 
 - **Smart contracts** — Sui Move (Mainnet)
 - **Randomness** — `sui::random` (on-chain)
-- **Staking** — native delegation to Triton One validator
+- **Yield engine** — haSUI (Haedal LST): continuous compounding, O(1) at any TVL, native redemption for exits. See [docs/v6-architecture.md](docs/v6-architecture.md)
 - **Frontend** — React + Vite + @mysten/dapp-kit
 - **Crank** — Node.js on Fly.io
 - **Hosting** — Vercel (surgeonsui.com)
@@ -178,7 +180,3 @@ node crank.js
 ## Built for Sui Overflow 2026
 
 Surge Protocol was built for the Sui Overflow 2026 hackathon.
-
-## v6 architecture (in development)
-
-See [docs/v6-architecture.md](docs/v6-architecture.md) — LST-based yield engine, testnet-validated, audit planned before mainnet.

@@ -3,20 +3,20 @@
 ## General
 
 ### What is Surge Protocol?
-Surge Protocol is a no-loss prize savings game on Sui. Stake SUI to earn real validator yield, which funds prize pools. Winners are selected using on-chain randomness. Your principal is always safe.
+Surge Protocol is a no-loss prize savings game on Sui. Staked SUI is converted into haSUI (Haedal liquid staking) and earns real staking yield from the second it arrives — the yield funds prize pools. Winners are selected using on-chain randomness. Your principal is always safe.
 
 ### How does it work?
 1. Stake SUI through Surge Protocol (minimum 1 SUI)
-2. Your SUI is delegated to Triton One validator — earning real yield (~1.5% APY)
-3. Validator yield is harvested automatically each epoch
+2. Your SUI is atomically converted to haSUI (Haedal) inside the vault — earning real staking yield (~2-2.5% APY) continuously, no warmup
+3. The yield (haSUI appreciation) is harvested automatically — the contract enforces on-chain that harvest can never touch principal
 4. Yield funds three prize pools: Spark (every 6h), Pulse (weekly), Surge (monthly)
 5. Winners are drawn using `sui::random` — an on-chain random value that can't be predicted in advance
 
 ### Is my principal at risk?
-No. Your staked SUI is delegated to Triton One validator via Sui's native staking system. Only the yield goes to prize pools. You can unstake anytime (24h epoch delay).
+No. Your staked SUI is held as haSUI, Sui's largest liquid staking token (Haedal, live since 2023, $200M+ TVL). Only the yield goes to prize pools. You can unstake anytime — exits use Haedal's native redemption at the exact rate (1-2 epochs, ~1-2 days, no fee).
 
-### What is Triton One?
-Triton One is one of Sui's established validators with high uptime. Your SUI is delegated directly to them — the same way you'd stake natively on Sui, just routed through the Surge vault.
+### What is haSUI / Haedal?
+haSUI is Haedal's liquid staking token — the largest and oldest LST on Sui (live since 2023, audited, $200M+ TVL). It appreciates against SUI as staking rewards accrue. The Surge vault holds your principal as haSUI, so every SUI earns continuously with no staking warmup. Honest trade-off: the no-loss guarantee depends on haSUI staying solvent and redeemable — mitigated by using native redemption (exact rate) for all principal exits.
 
 ---
 
@@ -81,11 +81,11 @@ TBD, and not guaranteed. The points system is live now to track early supporters
 
 ## Technical
 
-### Which validator is used?
-Triton One — a professional Sui validator. Address: `0xa608b66f7ae2201286f7dd07a8b073cde7955b35056629636a6c9b3f5275f384` (verified on-chain).
+### Where is the SUI actually staked?
+Inside Haedal's staking pool (haSUI), which delegates across Sui validators automatically. Vault: `0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5` (verified on-chain).
 
 ### What's the unstake delay?
-1 epoch (~24 hours). Standard Sui protocol requirement. Note: withdrawal of requested-unstake principal is paid from a liquid buffer topped up at each harvest, so if the crank is paused you may need to retry after the next harvest. Funds are never at risk.
+1-2 epochs (~1-2 days) via Haedal's native redemption. When you unstake, you receive a redemption ticket; after maturity you claim your full principal directly — no crank involved, no fee, exact rate. Funds are never at risk.
 
 ### Is the contract audited?
 Not yet. An internal code review has been done; a formal third-party audit is planned before TVL grows significantly. The contract is open source and verifiable on-chain. See the README "Trust model" section for current limitations.
