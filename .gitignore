@@ -11,3 +11,8 @@ frontend/dist/
 Published.toml.save
 scripts/.env
 .env
+
+build/
+node_modules/
+dist/
+*.bak
