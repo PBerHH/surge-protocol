@@ -494,4 +494,20 @@ module surge::stake_vault {
     public fun init_for_testing(ctx: &mut TxContext) {
         init(ctx);
     }
+
+    #[test_only]
+    public fun new_receipt_for_testing(
+        owner: address,
+        principal_mist: u64,
+        ctx: &mut TxContext,
+    ): StakingReceipt {
+        StakingReceipt {
+            id: object::new(ctx),
+            owner,
+            principal_mist,
+            deposit_ts_ms: 0,
+            unlock_ts_ms: option::none(),
+        }
+    }
+
 }
