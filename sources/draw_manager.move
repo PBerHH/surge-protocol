@@ -49,6 +49,12 @@ module surge::draw_manager {
     const DF_SPARK_REG: u8 = 10;
     const DF_PULSE_REG: u8 = 11;
     const DF_SURGE_REG: u8 = 12;
+    // dynamic-field keys: receipt ID -> draw index when last used (per draw type).
+    // Closes the receipt-transfer replay: a receipt that produced a ticket this
+    // period cannot be transferred to another wallet and reused for the same draw.
+    const DF_SPARK_RID: u8 = 20;
+    const DF_PULSE_RID: u8 = 21;
+    const DF_SURGE_RID: u8 = 22;
 
     // ── Errors ─────────────────────────────────────────────────────────────────
 
@@ -78,7 +84,8 @@ module surge::draw_manager {
     public struct AdminCap has key, store { id: UID }
 
     /// Hot potato: accumulates a staker's TOTAL stake across receipts.
-    /// No abilities -> cannot be dropped/stored; MUST be consumed by finish_pulse/finish_surge.
+    /// No abilities -> cannot be dropped/stored; MUST be consumed by finish_pulse/finish_surge
+    /// IN THE SAME TRANSACTION it was created (this is what makes start/add/finish atomic).
     public struct RegSession {
         staker: address,
         total_mist: u64,
@@ -128,6 +135,22 @@ module surge::draw_manager {
         };
     }
 
+    /// Mark receipt `rid` used for `period` under `key`; abort if already used this period.
+    /// This is the anti-replay guard against transferring a used receipt to a fresh wallet.
+    fun mark_receipt(state: &mut DrawState, key: u8, rid: ID, period: u64, ctx: &mut TxContext) {
+        if (!df::exists(&state.id, key)) {
+            df::add(&mut state.id, key, table::new<ID, u64>(ctx));
+        };
+        let reg: &mut Table<ID, u64> = df::borrow_mut(&mut state.id, key);
+        if (table::contains(reg, rid)) {
+            let last = *table::borrow(reg, rid);
+            assert!(last != period, E_DUPLICATE_RECEIPT);
+            *table::borrow_mut(reg, rid) = period;
+        } else {
+            table::add(reg, rid, period);
+        };
+    }
+
     fun push_n(v: &mut vector<address>, who: address, n: u64) {
         let mut i = 0;
         while (i < n) { vector::push_back(v, who); i = i + 1; };
@@ -148,6 +171,7 @@ module surge::draw_manager {
         if (count == 0) { return };
         let period = state.spark_draw_count;
         mark_registered(state, DF_SPARK_REG, staker, period, ctx);
+        mark_receipt(state, DF_SPARK_RID, object::id(receipt), period, ctx);
         push_n(&mut state.spark_tickets, staker, count);
         event::emit(TicketsRegistered { draw_type: 0, staker, ticket_count: count });
     }
@@ -168,6 +192,16 @@ module surge::draw_manager {
         session.total_mist = session.total_mist + stake_vault::staking_receipt_principal(receipt);
     }
 
+    /// Mark every receipt in the session used for `period` (anti-transfer-replay).
+    fun mark_session_receipts(state: &mut DrawState, key: u8, ids: &vector<ID>, period: u64, ctx: &mut TxContext) {
+        let mut i = 0;
+        let n = vector::length(ids);
+        while (i < n) {
+            mark_receipt(state, key, *vector::borrow(ids, i), period, ctx);
+            i = i + 1;
+        };
+    }
+
     public fun finish_pulse(
         state: &mut DrawState,
         session: RegSession,
@@ -175,13 +209,14 @@ module surge::draw_manager {
         clock: &Clock,
         ctx: &mut TxContext,
     ) {
-        let RegSession { staker, total_mist, receipt_ids: _ } = session;
+        let RegSession { staker, total_mist, receipt_ids } = session;
         assert!(staker == tx_context::sender(ctx), E_NOT_OWNER);
         let stake_sui = total_mist / MIST_PER_SUI;
         let count = ticket_engine::pulse_tickets(stake_sui, record, clock);
         if (count == 0) { return };
         let period = state.pulse_draw_count;
         mark_registered(state, DF_PULSE_REG, staker, period, ctx);
+        mark_session_receipts(state, DF_PULSE_RID, &receipt_ids, period, ctx);
         push_n(&mut state.pulse_tickets, staker, count);
         event::emit(TicketsRegistered { draw_type: 1, staker, ticket_count: count });
     }
@@ -193,13 +228,14 @@ module surge::draw_manager {
         clock: &Clock,
         ctx: &mut TxContext,
     ) {
-        let RegSession { staker, total_mist, receipt_ids: _ } = session;
+        let RegSession { staker, total_mist, receipt_ids } = session;
         assert!(staker == tx_context::sender(ctx), E_NOT_OWNER);
         let stake_sui = total_mist / MIST_PER_SUI;
         let count = ticket_engine::surge_tickets(stake_sui, record, clock);
         if (count == 0) { return };
         let period = state.surge_draw_count;
         mark_registered(state, DF_SURGE_REG, staker, period, ctx);
+        mark_session_receipts(state, DF_SURGE_RID, &receipt_ids, period, ctx);
         push_n(&mut state.surge_tickets, staker, count);
         event::emit(TicketsRegistered { draw_type: 2, staker, ticket_count: count });
     }
@@ -290,13 +326,12 @@ module surge::draw_manager {
     public fun init_for_testing(ctx: &mut TxContext) { init(ctx); }
 
     // ── Tests (run with: sui move test) ──────────────────────────────────────────
-    // Validate Fix #1's NEW logic without real staking/network. Requires the
-    // #[test_only] stake_vault::new_receipt_for_testing constructor.
 
     #[test_only] use sui::test_scenario as ts;
     #[test_only] use sui::test_utils;
 
     #[test_only] const ALICE: address = @0xA11CE;
+    #[test_only] const BOB:   address = @0xB0B;
     #[test_only] const TWELVE_SUI: u64 = 12_000_000_000;
 
     /// TEST A — on-chain derivation: a spark registration yields exactly 1 ticket.
@@ -321,7 +356,7 @@ module surge::draw_manager {
         ts::end(sc);
     }
 
-    /// TEST B — dedup: a second spark registration in the same period aborts.
+    /// TEST B — dedup: a second spark registration in the same period (same wallet) aborts.
     #[test]
     #[expected_failure(abort_code = E_ALREADY_REGISTERED)]
     fun test_spark_dedup_aborts() {
@@ -357,7 +392,6 @@ module surge::draw_manager {
         let r1 = stake_vault::new_receipt_for_testing(ALICE, TWELVE_SUI, ts::ctx(&mut sc));
         let r2 = stake_vault::new_receipt_for_testing(ALICE, TWELVE_SUI, ts::ctx(&mut sc));
 
-        // expected = ticket_engine applied to the combined 24 SUI (sqrt of TOTAL, once)
         let expected = ticket_engine::pulse_tickets(24, &record, &clk);
 
         let mut sess = start_session(ts::ctx(&mut sc));
@@ -365,7 +399,6 @@ module surge::draw_manager {
         add_receipt(&mut sess, &r2, ts::ctx(&mut sc));
         finish_pulse(&mut state, sess, &record, &clk, ts::ctx(&mut sc));
 
-        // proves finish_pulse used the 24-SUI total, not one receipt or per-receipt sqrt
         assert!(pulse_ticket_count(&state) == expected, 0);
 
         test_utils::destroy(r1);
@@ -376,7 +409,7 @@ module surge::draw_manager {
         ts::end(sc);
     }
 
-    /// TEST D — replay guard: adding the same receipt twice in one session aborts.
+    /// TEST D — replay guard (in-session): adding the same receipt twice aborts.
     #[test]
     #[expected_failure(abort_code = E_DUPLICATE_RECEIPT)]
     fun test_duplicate_receipt_aborts() {
@@ -391,6 +424,35 @@ module surge::draw_manager {
         let RegSession { staker: _, total_mist: _, receipt_ids: _ } = sess;
         test_utils::destroy(r1);
         clock::destroy_for_testing(clk);
+        ts::end(sc);
+    }
+
+    /// TEST E — CROSS-WALLET replay guard: the receipt-transfer Sybil attack must abort.
+    /// Alice registers spark with receipt R, then R is used by a different wallet (BOB)
+    /// in the SAME period — simulating a transfer. Receipt-ID dedup must reject it.
+    #[test]
+    #[expected_failure(abort_code = E_DUPLICATE_RECEIPT)]
+    fun test_receipt_transfer_replay_aborts() {
+        let mut sc = ts::begin(ALICE);
+        init_for_testing(ts::ctx(&mut sc));
+        ts::next_tx(&mut sc, ALICE);
+
+        let mut state = ts::take_shared<DrawState>(&sc);
+        let clk = clock::create_for_testing(ts::ctx(&mut sc));
+        let record = loyalty_tracker::new_record(&clk, ts::ctx(&mut sc));
+        let receipt = stake_vault::new_receipt_for_testing(ALICE, TWELVE_SUI, ts::ctx(&mut sc));
+
+        // Alice registers with R (period 0)
+        register_spark_v2(&mut state, &receipt, &record, &clk, ts::ctx(&mut sc));
+
+        // "Transfer" R to BOB and try again in the same period -> must abort
+        ts::next_tx(&mut sc, BOB);
+        register_spark_v2(&mut state, &receipt, &record, &clk, ts::ctx(&mut sc)); // aborts E_DUPLICATE_RECEIPT
+
+        test_utils::destroy(receipt);
+        test_utils::destroy(record);
+        clock::destroy_for_testing(clk);
+        ts::return_shared(state);
         ts::end(sc);
     }
 }
