@@ -189,14 +189,20 @@ export default function App() {
 
   const fetchReceipts = useCallback(async () => {
     if (!account?.address) return;
+    // Each fetch is independent: a failure in one (e.g. an RPC quirk on the
+    // Haedal ticket filter) must NOT block the others (the v6 receipts bug).
     try {
       const res = await Promise.all([PACKAGE, PKG_CALL].map(pkg => client.getOwnedObjects({ owner: account.address, filter: { StructType: `${pkg}::stake_vault::StakingReceipt` }, options: { showContent: true } })));
       setUserReceipts(res.flatMap(r => r.data).map(o => o.data?.content?.fields).filter(Boolean));
+    } catch (e) { console.error("V5 receipts:", e); setUserReceipts([]); }
+    try {
       const v6res = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${V6_PACKAGE}::stake_vault_v6::StakeReceiptV6` }, options: { showContent: true } });
       setV6Receipts(v6res.data.map(o => o.data?.content?.fields).filter(Boolean));
+    } catch (e) { console.error("V6 receipts:", e); setV6Receipts([]); }
+    try {
       const tix = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${HAEDAL_PKG_ORIG}::staking::UnstakeTicket` }, options: { showContent: true } });
       setHaTickets(tix.data.map(o => ({ id: o.data?.objectId })).filter(t => t.id));
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error("Haedal tickets:", e); setHaTickets([]); }
   }, [account, client]);
 
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
@@ -462,8 +468,9 @@ export default function App() {
   const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
   const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
-  const myStakeMist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
-  const myStakeSui = myStakeMist / 1e9;
+  const myV6Mist = v6Receipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
+  const myV5Mist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
+  const myStakeSui = (myV6Mist + myV5Mist) / 1e9;
   const myTotalWon = myWinnings.reduce((acc, w) => acc + w.amount, 0);
   const loyaltyProgress = loyaltyData ? Math.min((loyaltyData.daysStaked / 365) * 100, 100) : 5;
 
