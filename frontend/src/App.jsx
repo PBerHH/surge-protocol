@@ -21,7 +21,7 @@ const HAEDAL_PKG_ORIG   = "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57e
 const HAEDAL_PKG_LATEST = "0x126e4cfb051cad744706df590ec399e8c02b6feae195c35b8b496280d5442a62";
 // Supabase (points) — paste the anon/public key from Supabase → Settings → API
 const SUPABASE_URL = "https://dqcjgvotffxutvgvahse.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxY2pndm90ZmZ4dXR2Z3ZhaHNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjI0MDQsImV4cCI6MjA5NDkzODQwNH0.J6m4cARii-VU3AQIotHY0i6hQC4HOXDZvvcE7MCyVC8";
+const SUPABASE_ANON_KEY = "";
 
 // ── Legacy Contracts (withdraw-only — let old depositors recover their SUI) ──
 const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
@@ -449,7 +449,7 @@ export default function App() {
   }
 
   function handleShare() {
-    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_principal ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surgeonsui.com`;
+    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_principal ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surge-protocol-chi.vercel.app`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
   }
 
@@ -458,6 +458,9 @@ export default function App() {
   const pulseTickets = sui >= 10 ? Math.floor(Math.sqrt(sui)) : 0;
   const surgeTickets = sui >= 50 ? Math.floor(Math.sqrt(sui)) : 0;
   const totalStaked = BigInt(vaultData?.total_principal ?? 0) + BigInt(v6VaultData?.total_principal ?? 0);
+  const pioneerTaken = leaderboard.length;            // real unique on-chain stakers
+  const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
+  const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
   const myStakeMist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
   const myStakeSui = myStakeMist / 1e9;
@@ -518,6 +521,19 @@ export default function App() {
             </div>
           </>}
         </div>
+
+        {pioneerLeft > 0 && (
+          <div style={{ maxWidth: 520, margin: "1rem auto 0", padding: "0.85rem 1.25rem", borderRadius: 12, border: "1px solid rgba(245,200,66,0.3)", background: "linear-gradient(90deg, rgba(245,200,66,0.08), rgba(198,127,232,0.06))", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: "0.8rem", color: "#F5C842", fontWeight: 600, letterSpacing: "0.04em" }}>
+              🚀 PIONEER PHASE — {pioneerTaken}/1000 joined
+            </div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: "0.72rem", color: "rgba(255,255,255,0.5)", lineHeight: 1.5 }}>
+              {earlyBirdLeft > 0
+                ? `First 100 stakers earn 3x points forever (${earlyBirdLeft} left) · first 1000 earn 2x`
+                : `First 1000 stakers earn 2x points forever (${pioneerLeft} left)`}
+            </div>
+          </div>
+        )}
       </header>
 
       <main className="main">
@@ -583,7 +599,7 @@ export default function App() {
               <button className="stake-btn" onClick={handleStake} disabled={!account || txStatus?.type === "pending"}>
                 {!account ? "Connect wallet to stake" : txStatus?.type === "pending" ? "Confirming..." : `Stake ${stakeAmount || "0"} SUI`}
               </button>
-              <p className="stake-note">Principal always protected · 1-2 epoch unstake · On-chain VRF</p>
+              <p className="stake-note">Principal always protected · 1-epoch unstake · On-chain VRF</p>
             </section>
 
             <section className="panel loyalty-panel">
@@ -795,7 +811,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <span>Surge Protocol · Sui Mainnet · v6 engine</span>
+        <span>Surge Protocol · Sui Mainnet · V3</span>
         <a href="https://github.com/PBerHH/surge-protocol" target="_blank" rel="noreferrer">GitHub ↗</a>
       </footer>
     </div>
