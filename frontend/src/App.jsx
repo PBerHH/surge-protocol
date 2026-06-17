@@ -21,7 +21,7 @@ const HAEDAL_PKG_ORIG   = "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57e
 const HAEDAL_PKG_LATEST = "0x126e4cfb051cad744706df590ec399e8c02b6feae195c35b8b496280d5442a62";
 // Supabase (points) — paste the anon/public key from Supabase → Settings → API
 const SUPABASE_URL = "https://dqcjgvotffxutvgvahse.supabase.co";
-const SUPABASE_ANON_KEY = "";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxY2pndm90ZmZ4dXR2Z3ZhaHNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjI0MDQsImV4cCI6MjA5NDkzODQwNH0.J6m4cARii-VU3AQIotHY0i6hQC4HOXDZvvcE7MCyVC8";
 
 // ── Legacy Contracts (withdraw-only — let old depositors recover their SUI) ──
 const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
