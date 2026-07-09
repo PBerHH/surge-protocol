@@ -40,6 +40,17 @@ function fmtSui(mist) {
   if (n >= 1000) return (n / 1000).toFixed(2) + "K";
   return n.toFixed(3);
 }
+const MIN_POOL_MIST = 1_000_000n; // 0.001 SUI — crank only draws above this
+
+// Pool-aware draw status: time alone doesn't make a draw "Ready" — the pool
+// must also be above the crank's minimum, otherwise nothing will fire and
+// "Ready ✓" would mislead visitors. Three honest states instead.
+function drawStatus(ms, poolMist) {
+  const pool = BigInt(poolMist ?? 0);
+  if (pool < MIN_POOL_MIST) return { label: "Filling — draws after next harvest", urgent: false };
+  return countdown(ms);
+}
+
 function countdown(ms) {
   if (!ms || Number(ms) === 0) return { label: "Ready ✓", urgent: true };
   const diff = Number(BigInt(ms)) - Date.now();
@@ -106,7 +117,7 @@ function LiveDrawTicker({ drawData, poolData }) {
     <div style={{ background: "var(--bg3)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "8px 14px", display: "flex", gap: 24, alignItems: "center", overflowX: "auto", fontSize: 11, fontFamily: "'DM Mono',monospace" }}>
       <span style={{ color: "var(--text3)", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>LIVE</span>
       {items.map(item => {
-        const { label, urgent } = countdown(item.next);
+        const { label, urgent } = drawStatus(item.next, item.pool);
         return (
           <div key={item.name} style={{ display: "flex", gap: 8, alignItems: "center", whiteSpace: "nowrap" }}>
             <span style={{ color: item.color, fontWeight: 600 }}>{item.name}</span>
@@ -142,6 +153,7 @@ export default function App() {
   const [lastWinners, setLastWinners] = useState([]);
   const [myWinnings, setMyWinnings] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [stakerCount, setStakerCount] = useState(0);
   const [openFaq, setOpenFaq] = useState(null);
   const [activeTab, setActiveTab] = useState("stake");
   const [loyaltyData, setLoyaltyData] = useState(null);
@@ -261,9 +273,21 @@ export default function App() {
       // V5 vault still holds principal; after wind-down V6 net is the whole truth.
       const v5Vault = await client.getObject({ id: VAULT, options: { showContent: true } });
       const v5Active = BigInt(v5Vault.data?.content?.fields?.total_principal ?? 0) > 0n;
+      // Paginated: without a cursor loop the staker set (and the pioneer
+      // counter derived from it) silently caps at 50 stake events.
+      const queryAll = async (type) => {
+        const all = []; let cursor = null;
+        for (let i = 0; i < 20; i++) {
+          const res = await client.queryEvents({ query: { MoveEventType: type }, limit: 50, cursor });
+          all.push(...res.data);
+          if (!res.hasNextPage) break;
+          cursor = res.nextCursor;
+        }
+        return { data: all };
+      };
       const queries = [
-        client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::StakedV6` }, limit: 50 }),
-        client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::UnstakedV6` }, limit: 50 }),
+        queryAll(`${V6_PACKAGE}::stake_vault_v6::StakedV6`),
+        queryAll(`${V6_PACKAGE}::stake_vault_v6::UnstakedV6`),
       ];
       if (v5Active) queries.push(...[PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveEventType: `${pkg}::stake_vault::Staked` }, limit: 50 })));
       const [stakedV6, unstakedV6, ...v5res] = await Promise.all(queries);
@@ -281,6 +305,10 @@ export default function App() {
         if (f?.staker && f?.amount_mist) stakes[f.staker] = (stakes[f.staker] ?? 0n) + BigInt(f.amount_mist);
       }
       for (const a of Object.keys(stakes)) { if (stakes[a] <= 0n) delete stakes[a]; }
+      // Full staker count for the pioneer banner — the leaderboard below is a
+      // top-10 DISPLAY slice; deriving the pioneer count from it would freeze
+      // the banner at "10/1000 joined" forever once an 11th staker exists.
+      setStakerCount(Object.keys(stakes).length);
       setLeaderboard(Object.entries(stakes).sort((a, b) => b[1] > a[1] ? 1 : -1).slice(0, 10).map(([addr, mist], i) => ({ rank: i + 1, addr, sui: Number(mist) / 1e9 })));
     } catch (e) { console.error(e); }
   }, [client]);
@@ -464,7 +492,7 @@ export default function App() {
   const pulseTickets = sui >= 10 ? Math.floor(Math.sqrt(sui)) : 0;
   const surgeTickets = sui >= 50 ? Math.floor(Math.sqrt(sui)) : 0;
   const totalStaked = BigInt(vaultData?.total_principal ?? 0) + BigInt(v6VaultData?.total_principal ?? 0);
-  const pioneerTaken = leaderboard.length;            // real unique on-chain stakers
+  const pioneerTaken = stakerCount;                   // ALL unique on-chain stakers (not the top-10 slice)
   const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
   const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
@@ -548,7 +576,7 @@ export default function App() {
 
         <section className="draws">
           {draws.map(d => {
-            const { label, urgent } = countdown(d.next);
+            const { label, urgent } = drawStatus(d.next, d.pool);
             const diff = d.next && d.next !== '0' ? Number(BigInt(d.next)) - Date.now() : Infinity;
             const isFomo = d.name === "Spark" && diff > 0 && diff < 3600000;
             return (
