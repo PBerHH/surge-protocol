@@ -231,6 +231,14 @@ export default function App() {
 
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
 
+  // Same tier formula as the legacy V5 LoyaltyRecord path below, factored
+  // out so both paths compute identically instead of drifting apart.
+  const loyaltyFromDays = (daysStaked, streakDays = 0) => {
+    let baseBp = daysStaked >= 365 ? 20000 : daysStaked >= 180 ? 18000 : daysStaked >= 90 ? 15000 : daysStaked >= 30 ? 12000 : 10000;
+    const totalBp = Math.min(baseBp + Math.floor((streakDays * 3000) / 30), 20000);
+    return totalBp / 10000;
+  };
+
   const fetchLoyalty = useCallback(async () => {
     if (!account?.address) return;
     try {
@@ -241,13 +249,24 @@ export default function App() {
         if (f) {
           const daysStaked = Math.floor((Date.now() - Number(f.stake_start_ms)) / 86400000);
           const streakDays = Math.min(Number(f.streak_days ?? 0), 30);
-          let baseBp = daysStaked >= 365 ? 20000 : daysStaked >= 180 ? 18000 : daysStaked >= 90 ? 15000 : daysStaked >= 30 ? 12000 : 10000;
-          const totalBp = Math.min(baseBp + Math.floor((streakDays * 3000) / 30), 20000);
-          setLoyaltyData({ daysStaked, streakDays, multiplier: totalBp / 10000 });
+          setLoyaltyData({ daysStaked, streakDays, multiplier: loyaltyFromDays(daysStaked, streakDays) });
+          return;
         }
       }
+      // No V5 LoyaltyRecord (expected for V6-only stakers — the V6 contract
+      // has no loyalty_tracker module). Fall back to the earliest
+      // deposit_ts_ms across this wallet's V6 receipts. Streak bonus is 0
+      // here since that data was never tracked on-chain for V6 — honest
+      // rather than fabricated.
+      if (v6Receipts.length > 0) {
+        const earliestMs = Math.min(...v6Receipts.map(r => Number(r.deposit_ts_ms ?? Date.now())));
+        const daysStaked = Math.floor((Date.now() - earliestMs) / 86400000);
+        setLoyaltyData({ daysStaked, streakDays: 0, multiplier: loyaltyFromDays(daysStaked, 0) });
+      } else {
+        setLoyaltyData(null);
+      }
     } catch (e) { console.error(e); }
-  }, [account, client]);
+  }, [account, client, v6Receipts]);
 
   useEffect(() => { fetchLoyalty(); }, [fetchLoyalty]);
 
