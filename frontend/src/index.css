@@ -92,8 +92,8 @@ body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-s
 .stake-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .stake-note { font-size: 11px; font-family: 'DM Mono', monospace; color: var(--text3); text-align: center; line-height: 1.6; }
 
-.loyalty-tiers { display: flex; justify-content: space-between; margin-bottom: 10px; }
-.tier { text-align: center; }
+.loyalty-tiers { position: relative; margin-bottom: 10px; }
+.tier { position: absolute; top: 0; width: 60px; }
 .tier-mult { font-family: 'DM Mono', monospace; font-size: 14px; color: var(--text2); }
 .tier.current .tier-mult { color: var(--gold); font-weight: 500; }
 .tier-days { font-size: 10px; font-family: 'DM Mono', monospace; color: var(--text3); margin-top: 3px; }
