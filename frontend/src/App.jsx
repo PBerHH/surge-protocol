@@ -711,25 +711,10 @@ export default function App() {
 
             <section className="panel loyalty-panel">
               <div className="panel-title">Loyalty Multiplier</div>
-              <div className="loyalty-tiers" style={{ position: "relative", height: 40 }}>
+              <div className="loyalty-tiers">
                 {[{ days: "0d", mult: "1.0x", threshold: 0 }, { days: "30d", mult: "1.2x", threshold: 30 }, { days: "90d", mult: "1.5x", threshold: 90 }, { days: "180d", mult: "1.8x", threshold: 180 }, { days: "365d", mult: "2.0x", threshold: 365 }].map(t => {
                   const active = loyaltyData ? loyaltyData.daysStaked >= t.threshold : t.threshold === 0;
-                  // True proportional position on the 0-365d scale, clamped
-                  // slightly inward at the ends so labels don't clip outside
-                  // the track edges.
-                  const pct = Math.min(Math.max((t.threshold / 365) * 100, 2), 98);
-                  const align = t.threshold === 0 ? "left" : t.threshold === 365 ? "right" : "center";
-                  const transform = align === "left" ? "translateX(0)" : align === "right" ? "translateX(-100%)" : "translateX(-50%)";
-                  return (
-                    <div
-                      className={`tier ${active ? "current" : ""}`}
-                      key={t.days}
-                      style={{ position: "absolute", left: `${pct}%`, transform, textAlign: align }}
-                    >
-                      <div className="tier-mult">{t.mult}</div>
-                      <div className="tier-days">{t.days}</div>
-                    </div>
-                  );
+                  return <div className={`tier ${active ? "current" : ""}`} key={t.days}><div className="tier-mult">{t.mult}</div><div className="tier-days">{t.days}</div></div>;
                 })}
               </div>
               <div className="loyalty-track"><div className="loyalty-fill" style={{ width: `${loyaltyProgress}%` }} /></div>
