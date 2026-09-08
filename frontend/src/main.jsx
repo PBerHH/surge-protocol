@@ -14,7 +14,7 @@ const queryClient = new QueryClient();
 // transition (full removal from node software isn't until mid-Oct 2026), so
 // pointing directly at that URL restores the site with zero other changes.
 const networks = {
-  mainnet: { url: "https://youthful-newton:clang-chain-scheme-cyclic-specks-fall@sui-mainnet.core.chainstack.com" },
+  mainnet: { url: "https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94" },
 };
 
 ReactDOM.createRoot(document.getElementById("root")).render(

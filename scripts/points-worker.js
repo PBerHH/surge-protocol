@@ -23,7 +23,7 @@ if (!PACKAGE_ID || !SUPABASE_URL || !SUPABASE_SECRET_KEY) {
 // transition (full removal isn't until mid-Oct 2026). Same fix as crank.js
 // and frontend/src/main.jsx.
 const RPC_URL = process.env.RPC_URL || (NETWORK === 'mainnet'
-  ? 'https://youthful-newton:clang-chain-scheme-cyclic-specks-fall@sui-mainnet.core.chainstack.com'
+  ? 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94'
   : getFullnodeUrl(NETWORK));
 
 const sui = new SuiClient({ url: RPC_URL });
