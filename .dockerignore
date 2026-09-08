@@ -1,0 +1,4 @@
+frontend/
+build/
+.git/
+node_modules/

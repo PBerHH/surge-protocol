@@ -9,7 +9,8 @@
     "start:points": "node points-worker.js"
   },
   "dependencies": {
-    "@mysten/sui": "^1.0.0",
+    "@mysten/graphql-transport": "^0.4.3",
+    "@mysten/sui": "^1.45.2",
     "@supabase/supabase-js": "^2.106.1",
     "dotenv": "^17.4.2",
     "node-cron": "^4.2.1",

@@ -43,6 +43,39 @@ const SUI_SYSTEM = '0x0000000000000000000000000000000000000000000000000000000000
 const SUI_CLOCK  = '0x0000000000000000000000000000000000000000000000000000000000000006';
 const SUI_RANDOM = '0x0000000000000000000000000000000000000000000000000000000000000008';
 
+// ── RPC timeout guard ──────────────────────────────────────────────────────────
+// Every Sui RPC call gets a hard timeout. Without this a single unresponsive
+// fullnode freezes the whole crank indefinitely (the 07:33 harvest hang).
+// On timeout the call REJECTS — caught by the per-step try/catch, so the tick
+// logs the failure and the next tick proceeds normally instead of wedging.
+// Note: a timeout aborts the WAIT, not necessarily the on-chain tx; the next
+// tick always reconciles from live on-chain state, so a late-landing tx is safe.
+const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS ?? 90_000); // 90s
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`RPC timeout: ${label} exceeded ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Monkey-patch the SuiClient instance so every RPC method we use is time-bounded.
+function wrapClientWithTimeout(client, ms) {
+  const methods = [
+    'getObject', 'multiGetObjects', 'getOwnedObjects', 'queryEvents',
+    'devInspectTransactionBlock', 'signAndExecuteTransaction',
+    'waitForTransaction', 'getLatestSuiSystemState',
+  ];
+  for (const m of methods) {
+    if (typeof client[m] === 'function') {
+      const orig = client[m].bind(client);
+      client[m] = (...args) => withTimeout(orig(...args), ms, m);
+    }
+  }
+  return client;
+}
+
 // ── Keypair ───────────────────────────────────────────────────────────────────
 
 function loadKeypair() {
@@ -196,12 +229,31 @@ async function fetchHaRate(client, sender) {
 }
 
 /// V6 stakers = net of StakedV6 − UnstakedV6 per owner.
+/// Query ALL events of a type via cursor pagination. Without this, staker
+/// enumeration silently caps at the query limit — stakers beyond it would get
+/// NO tickets despite having stake. Hard cap of 40 pages (2000 events) with a
+/// loud warning so a pathological event flood can't spin the tick forever.
+async function queryAllEvents(client, type) {
+  const all = [];
+  let cursor = null;
+  for (let i = 0; i < 40; i++) {
+    const res = await client.queryEvents({ query: { MoveEventType: type }, limit: 50, cursor });
+    all.push(...res.data);
+    if (!res.hasNextPage) return all;
+    cursor = res.nextCursor;
+  }
+  console.error(`  ⚠️ queryAllEvents(${type.split('::').pop()}): >2000 events — enumeration truncated, RAISE PAGE CAP`);
+  return all;
+}
+
 async function fetchV6Stakers(client) {
   try {
-    const [stakedEv, unstakedEv] = await Promise.all([
-      client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::StakedV6` }, limit: 200 }),
-      client.queryEvents({ query: { MoveEventType: `${V6_PACKAGE}::stake_vault_v6::UnstakedV6` }, limit: 200 }),
+    const [stakedData, unstakedData] = await Promise.all([
+      queryAllEvents(client, `${V6_PACKAGE}::stake_vault_v6::StakedV6`),
+      queryAllEvents(client, `${V6_PACKAGE}::stake_vault_v6::UnstakedV6`),
     ]);
+    const stakedEv = { data: stakedData };
+    const unstakedEv = { data: unstakedData };
     const stakers = {};
     for (const ev of stakedEv.data) {
       const f = ev.parsedJson;
@@ -299,7 +351,7 @@ async function claimMaturedTickets(client, keypair, crankAddr) {
       });
       if (r.effects?.status?.status !== 'success') {
         const err = r.effects?.status?.error ?? '';
-        if (err.includes('6)')) {
+        if (/[（(,]\s*6\)/.test(err) || /\b6\)\s*$/.test(err)) { // MoveAbort code 6 exactly — not 16/26
           console.log(`     ⏳ Ticket ${id.slice(0, 10)}… not matured yet — retrying next tick`);
         } else {
           console.error(`     ❌ Claim failed for ${id.slice(0, 10)}…:`, err);
@@ -482,13 +534,42 @@ async function tick(client, keypair) {
       const surplusHa  = rate > 0n ? (surplusSui * RATE_SCALE) / rate : 0n;
       console.log(`  🟣 V6 vault — principal: ${fmt(v6.totalPrincipal)} SUI · haSUI: ${fmt(v6.haBalance)} @ ${Number(rate) / 1e6} · value: ${fmt(haValueSui)} SUI · yield: ${fmt(surplusSui)} SUI`);
 
-      if (surplusHa >= MIN_HARVEST_HA_V6 + 5_000_000n) {
-        // Comfortable margin above the on-chain minimum so the tx can't race the
-        // contract's own threshold and abort.
-        console.log(`  🌾 V6 surplus ${fmt(surplusHa)} haSUI ≥ threshold — harvesting`);
+      // Mirror the on-chain harvest gate EXACTLY (stake_vault_v6::harvest):
+      //   exact    = ceil(total_principal * RATE_SCALE / rate)        [ha_for_sui_ceil]
+      //   required = ceil(exact * (10000 + SAFETY_BPS) / 10000)        [required_ha, +0.1% margin]
+      //   harvest needs:  held > required  AND  (held - required) >= MIN_HARVEST_HA
+      const SAFETY_BPS = 10n;
+      const ceilDiv = (a, b) => (a + b - 1n) / b;
+      const exactHa    = ceilDiv(v6.totalPrincipal * RATE_SCALE, rate);
+      const requiredHa = ceilDiv(exactHa * (10_000n + SAFETY_BPS), 10_000n);
+      const contractSurplusHa = v6.haBalance > requiredHa ? v6.haBalance - requiredHa : 0n;
+
+      // ── Haedal's OWN floor, not just our contract's ──────────────────────
+      // Confirmed from Haedal's staking module source (request_unstake_delay):
+      //   assert!(v1 <= get_total_sui(arg0) && v1 >= 1_000_000_000, 8)
+      // where v1 = get_sui_by_stsui(surplus_ha) — the SUI VALUE of the haSUI
+      // being unstaked. harvest() calls this same function on the surplus, so
+      // ANY surplus worth < 1 SUI aborts there with code 8 — regardless of
+      // whether our own MIN_HARVEST_HA_V6 gate is satisfied. Our old gate
+      // (0.01 ha) was ~100x below Haedal's real floor, so the crank was firing
+      // into a guaranteed external abort every 6h. Convert Haedal's 1-SUI
+      // floor into a haSUI amount using the current rate, plus a small buffer
+      // so a tx can't land right on the boundary and abort by rounding.
+      const HAEDAL_MIN_SUI_MIST = 1_000_000_000n; // Haedal's own floor, not ours
+      const haedalMinHa = rate > 0n ? ceilDiv(HAEDAL_MIN_SUI_MIST * RATE_SCALE, rate) + 1_000_000n : MIN_HARVEST_HA_V6;
+      const effectiveMinHa = haedalMinHa > MIN_HARVEST_HA_V6 ? haedalMinHa : MIN_HARVEST_HA_V6;
+
+      if (v6.haBalance > requiredHa && contractSurplusHa >= effectiveMinHa) {
+        console.log(`  🌾 V6 contract-surplus ${fmt(contractSurplusHa)} haSUI ≥ ${fmt(effectiveMinHa)} (Haedal 1-SUI floor) — harvesting`);
         await harvestV6(client, keypair);
       } else {
-        console.log(`  ⏳ V6 harvest skipped — surplus ${fmt(surplusHa)}/${fmt(MIN_HARVEST_HA_V6)} haSUI`);
+        const deficitHa = effectiveMinHa > contractSurplusHa ? effectiveMinHa - contractSurplusHa : 0n;
+        // Rough ETA from a fixed daily rate-growth estimate (~0.000044/day,
+        // derived from observed mainnet rate deltas). Informational only —
+        // actual growth depends on Haedal's validator rewards and TVL changes.
+        const dailyRateGrowth = 44n; // scaled ×1e6, i.e. 0.000044/day
+        const daysEta = dailyRateGrowth > 0n ? (deficitHa * RATE_SCALE) / (v6.totalPrincipal * dailyRateGrowth) : 0n;
+        console.log(`  ⏳ V6 harvest skipped — contract-surplus ${fmt(contractSurplusHa)}/${fmt(effectiveMinHa)} haSUI (Haedal requires ≥1 SUI per unstake) — ~${daysEta}d at current TVL/rate-growth`);
       }
     } catch (e) {
       console.error('  ⚠️ V6 rate/surplus check failed:', e.message);
@@ -592,7 +673,9 @@ async function main() {
     process.exit(1);
   }
 
-  const client  = new SuiClient({ url: getFullnodeUrl(NETWORK) });
+  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94' : getFullnodeUrl(NETWORK) });
+  wrapClientWithTimeout(client, RPC_TIMEOUT_MS);
+  console.log(`   RPC timeout: ${RPC_TIMEOUT_MS / 1000}s per call`);
   const keypair = loadKeypair();
   console.log(`   Address:    ${keypair.getPublicKey().toSuiAddress()}\n`);
 

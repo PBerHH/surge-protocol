@@ -23,6 +23,18 @@ const HAEDAL_PKG_LATEST = "0x126e4cfb051cad744706df590ec399e8c02b6feae195c35b8b4
 const SUPABASE_URL = "https://dqcjgvotffxutvgvahse.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxY2pndm90ZmZ4dXR2Z3ZhaHNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjI0MDQsImV4cCI6MjA5NDkzODQwNH0.J6m4cARii-VU3AQIotHY0i6hQC4HOXDZvvcE7MCyVC8";
 
+// Referral: capture ?ref=<wallet> once on first page load and remember it
+// (localStorage), so it survives navigation up to the moment the visitor
+// actually stakes. A referral is only ever recorded once per NEW wallet
+// (enforced server-side by a unique constraint on referred_address), so this
+// capture is harmless even if the same link is opened many times.
+if (typeof window !== "undefined") {
+  const urlRef = new URLSearchParams(window.location.search).get("ref");
+  if (urlRef && /^0x[a-fA-F0-9]{1,64}$/.test(urlRef) && !localStorage.getItem("surge_ref")) {
+    localStorage.setItem("surge_ref", urlRef);
+  }
+}
+
 // ── Legacy Contracts (withdraw-only — let old depositors recover their SUI) ──
 const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
 const LEGACY_VAULT    = "0x0aa9c18818087b3e9e32c6eef8f3b17ce98670d5ac00eb54fd559d0d98db76be";
@@ -319,7 +331,7 @@ export default function App() {
     if (!account?.address || !SUPABASE_ANON_KEY) { setPointsData(null); return; }
     (async () => {
       try {
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/wallets?address=eq.${account.address}&select=total_points,multiplier,early_bird_rank,pioneer_rank`, {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/wallets?address=eq.${account.address}&select=total_points,multiplier,early_bird_rank,pioneer_rank,referral_bonus,referral_count`, {
           headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
         });
         const rows = await r.json();
@@ -353,7 +365,22 @@ export default function App() {
         ],
       });
       signAndExecute({ transaction: tx }, {
-        onSuccess: (r) => { setTxStatus({ type: "success", msg: `Staked! Tx: ${r.digest.slice(0,16)}...` }); setTimeout(() => { fetchData(); fetchReceipts(); fetchLoyalty(); fetchLeaderboard(); }, 3000); },
+        onSuccess: (r) => {
+          setTxStatus({ type: "success", msg: `Staked! Tx: ${r.digest.slice(0,16)}...` });
+          // Fire-and-forget: record the referral if this visitor arrived via
+          // a ?ref= link and hasn't already been recorded (server enforces
+          // the "once per wallet" and "can't refer yourself" rules — this
+          // call is allowed to fail silently, e.g. if already referred).
+          const refAddr = typeof window !== "undefined" ? localStorage.getItem("surge_ref") : null;
+          if (refAddr && account?.address && refAddr !== account.address) {
+            fetch(`${SUPABASE_URL}/rest/v1/referrals`, {
+              method: "POST",
+              headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              body: JSON.stringify({ referrer_address: refAddr, referred_address: account.address }),
+            }).catch(() => {});
+          }
+          setTimeout(() => { fetchData(); fetchReceipts(); fetchLoyalty(); fetchLeaderboard(); }, 3000);
+        },
         onError: (e) => setTxStatus({ type: "error", msg: e.message }),
       });
     } catch (e) { setTxStatus({ type: "error", msg: e.message }); }

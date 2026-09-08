@@ -17,7 +17,16 @@ if (!PACKAGE_ID || !SUPABASE_URL || !SUPABASE_SECRET_KEY) {
   process.exit(1);
 }
 
-const sui = new SuiClient({ url: getFullnodeUrl(NETWORK) });
+// Sui's official public JSON-RPC endpoints were disabled the week of July 27,
+// 2026 (ecosystem-wide migration to gRPC/GraphQL) — getFullnodeUrl(NETWORK)
+// now points at a dead endpoint. Chainstack still serves JSON-RPC during the
+// transition (full removal isn't until mid-Oct 2026). Same fix as crank.js
+// and frontend/src/main.jsx.
+const RPC_URL = process.env.RPC_URL || (NETWORK === 'mainnet'
+  ? 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94'
+  : getFullnodeUrl(NETWORK));
+
+const sui = new SuiClient({ url: RPC_URL });
 const db = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, { realtime: { transport: ws } });
 
 // Constants
@@ -27,6 +36,13 @@ const EARLY_BIRD_MULT = 3.0;
 const PIONEER_MULT = 2.0;
 const REGULAR_MULT = 1.0;
 const POINTS_PER_SUI_PER_DAY = 1.0;
+
+// Referral bonus: +10% additive multiplier per actively-staking referred
+// wallet, capped at 5 (so +50% max). "Actively staking" = current stake > 0,
+// checked fresh every tick — the bonus disappears the moment a referred
+// wallet fully unstakes, which is what stops referral farm-and-dump abuse.
+const REFERRAL_BONUS_PER_ACTIVE = 0.10;
+const REFERRAL_BONUS_CAP = 0.50;
 
 // StakingReceipt types — V5 (current receipts) + V6 (future upgrades)
 const PACKAGE_V5 = '0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb';
@@ -163,12 +179,39 @@ async function getOrCreateWallet(address, firstStakeMs) {
   return newWallet;
 }
 
+// Returns { referrer_address -> bonus } for every referrer who has at least
+// one actively-staking referred wallet this tick. Recomputed fresh every
+// tick from live stake amounts, so the bonus tracks reality automatically —
+// no separate "deactivate referral" logic needed anywhere.
+async function computeReferralBonuses(stakers) {
+  const { data: refs, error } = await db.from('referrals').select('referrer_address, referred_address');
+  if (error) {
+    console.error('  ⚠️ Failed to load referrals (referral bonuses skipped this tick):', error.message);
+    return { bonuses: {}, counts: {} };
+  }
+  const bonuses = {};
+  const counts = {};
+  for (const r of refs ?? []) {
+    const referredInfo = stakers[r.referred_address];
+    const referredStakeSui = referredInfo ? Number(referredInfo.realMist) / 1e9 : 0;
+    if (referredStakeSui > 0) {
+      counts[r.referrer_address] = (counts[r.referrer_address] ?? 0) + 1;
+    }
+  }
+  for (const [addr, count] of Object.entries(counts)) {
+    bonuses[addr] = Math.min(count * REFERRAL_BONUS_PER_ACTIVE, REFERRAL_BONUS_CAP);
+  }
+  return { bonuses, counts };
+}
+
 async function calculateAndUpdatePoints() {
   console.log(`\n⏰ [${new Date().toISOString()}] Points calculation tick`);
 
   try {
     const stakers = await fetchAllStakers();
     console.log(`  📊 Found ${Object.keys(stakers).length} stakers`);
+
+    const { bonuses: referralBonuses, counts: referralCounts } = await computeReferralBonuses(stakers);
 
     const now = Date.now();
     let processed = 0;
@@ -185,10 +228,16 @@ async function calculateAndUpdatePoints() {
       const daysStaked = (now - firstStakeMs) / 86400000;
       const loyaltyMult = calculateLoyaltyMultiplier(daysStaked);
 
+      // Referral bonus is ADDITIVE to the base tier multiplier (e.g. 1.0 base
+      // + 0.20 for 2 active referrals = 1.20 effective before loyalty).
+      const referralBonus = referralBonuses[address] ?? 0;
+      const referralCount = referralCounts[address] ?? 0;
+      const effectiveMultiplier = wallet.multiplier + referralBonus;
+
       // Calculate points earned this period (0 if fully unstaked)
       const lastUpdatedMs = new Date(wallet.last_updated).getTime();
       const hoursSinceUpdate = (now - lastUpdatedMs) / 3600000;
-      const pointsThisPeriod = (stakeSui * POINTS_PER_SUI_PER_DAY / 24) * hoursSinceUpdate * wallet.multiplier * loyaltyMult;
+      const pointsThisPeriod = (stakeSui * POINTS_PER_SUI_PER_DAY / 24) * hoursSinceUpdate * effectiveMultiplier * loyaltyMult;
 
       // Update wallet
       const newTotal = parseFloat(wallet.total_points) + pointsThisPeriod;
@@ -198,6 +247,8 @@ async function calculateAndUpdatePoints() {
         .update({
           total_points: newTotal,
           current_stake_sui: stakeSui,
+          referral_bonus: referralBonus,
+          referral_count: referralCount,
           last_updated: new Date().toISOString(),
         })
         .eq('address', address);
@@ -212,7 +263,8 @@ async function calculateAndUpdatePoints() {
       processed++;
 
       if (pointsThisPeriod > 0.01) {
-        console.log(`  ✨ ${address.slice(0, 10)}... : +${pointsThisPeriod.toFixed(2)} pts (${stakeSui.toFixed(2)} SUI × ${wallet.multiplier}x × ${loyaltyMult.toFixed(1)}x) = ${newTotal.toFixed(2)} total`);
+        const refNote = referralBonus > 0 ? ` +ref${(referralBonus * 100).toFixed(0)}%` : '';
+        console.log(`  ✨ ${address.slice(0, 10)}... : +${pointsThisPeriod.toFixed(2)} pts (${stakeSui.toFixed(2)} SUI × ${effectiveMultiplier.toFixed(2)}x${refNote} × ${loyaltyMult.toFixed(1)}x) = ${newTotal.toFixed(2)} total`);
       }
     }
 
@@ -230,8 +282,9 @@ async function calculateAndUpdatePoints() {
 }
 
 async function main() {
-  console.log('🏆 Surge Points Worker v1 — starting up');
+  console.log('🏆 Surge Points Worker v2 — referral bonuses + Chainstack RPC');
   console.log(`   Network:  ${NETWORK}`);
+  console.log(`   RPC:      ${RPC_URL}`);
   console.log(`   Package:  ${PACKAGE_ID.slice(0, 10)}...`);
   console.log(`   Supabase: ${SUPABASE_URL}`);
 
