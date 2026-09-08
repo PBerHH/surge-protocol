@@ -645,6 +645,9 @@ export default function App() {
                   <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.35rem" }}>
                     YOUR REFERRAL LINK
                   </div>
+                  <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.5rem", lineHeight: 1.5 }}>
+                    Share it — when someone stakes through your link, you earn up to +50% extra points for as long as they stay staked. No effect on their draw odds or principal.
+                  </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                     <code style={{ fontSize: "0.78rem", color: "#F5C842", background: "rgba(245,200,66,0.08)", padding: "0.3rem 0.6rem", borderRadius: 6, wordBreak: "break-all" }}>
                       surgeonsui.com/?ref={account.address}
