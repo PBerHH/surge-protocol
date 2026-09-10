@@ -677,6 +677,14 @@ export default function App() {
                     >
                       Copy
                     </button>
+                    <a
+                      href={`https://x.com/intent/tweet?text=${encodeURIComponent("Staking SUI with zero risk to principal. Only the yield wins prizes — join via my link: https://surgeonsui.com/?ref=" + account.address)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: "0.72rem", padding: "0.3rem 0.7rem", borderRadius: 6, border: "1px solid rgba(29,155,240,0.4)", background: "transparent", color: "rgba(29,155,240,0.9)", cursor: "pointer", textDecoration: "none" }}
+                    >
+                      Share on X
+                    </a>
                   </div>
                   {pointsData?.referral_count > 0 && (
                     <div style={{ fontSize: "0.72rem", color: "rgba(58,191,170,0.7)", marginTop: "0.4rem" }}>
