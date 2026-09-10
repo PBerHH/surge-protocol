@@ -546,7 +546,31 @@ export default function App() {
   const myV5Mist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
   const myStakeSui = (myV6Mist + myV5Mist) / 1e9;
   const myTotalWon = myWinnings.reduce((acc, w) => acc + w.amount, 0);
-  const loyaltyProgress = loyaltyData ? Math.min((loyaltyData.daysStaked / 365) * 100, 100) : 5;
+  // Tier-basierter Fortschrittsbalken: zeigt wie weit zum nächsten Tier,
+  // nicht wie weit über 365 Tage — viel aussagekräftiger.
+  const LOYALTY_TIERS = [
+    { days: 0,   mult: 1.0 },
+    { days: 30,  mult: 1.2 },
+    { days: 90,  mult: 1.5 },
+    { days: 180, mult: 1.8 },
+    { days: 365, mult: 2.0 },
+  ];
+  const loyaltyProgress = (() => {
+    if (!loyaltyData) return 5;
+    const d = loyaltyData.daysStaked;
+    const currentIdx = [...LOYALTY_TIERS].reverse().findIndex(t => d >= t.days);
+    const idx = LOYALTY_TIERS.length - 1 - currentIdx;
+    if (idx >= LOYALTY_TIERS.length - 1) return 100; // max tier
+    const from = LOYALTY_TIERS[idx].days;
+    const to   = LOYALTY_TIERS[idx + 1].days;
+    return Math.min(((d - from) / (to - from)) * 100, 100);
+  })();
+  const loyaltyNextTier = (() => {
+    if (!loyaltyData) return null;
+    const d = loyaltyData.daysStaked;
+    const next = LOYALTY_TIERS.find(t => t.days > d);
+    return next ? { days: next.days, mult: next.mult, daysLeft: next.days - d } : null;
+  })();
 
   const draws = [
     { name: "Spark", emoji: "⚡", color: "#F5C842", colorDim: "rgba(245,200,66,0.1)", freq: "Every 6h · 3 winners", share: "20%", pool: poolData?.spark_pool, next: drawData?.next_spark_ms },
@@ -731,7 +755,7 @@ export default function App() {
               <div className="loyalty-track"><div className="loyalty-fill" style={{ width: `${loyaltyProgress}%` }} /></div>
               {loyaltyData && (
                 <div style={{ fontSize: 12, fontFamily: "'DM Mono',monospace", color: "#E8A027", marginBottom: 6 }}>
-                  {loyaltyData.multiplier.toFixed(2)}x · {loyaltyData.daysStaked}d staked · {loyaltyData.streakDays}d streak
+                  {loyaltyData.multiplier.toFixed(2)}x · {loyaltyData.daysStaked}d staked{loyaltyNextTier ? ` · next ${loyaltyNextTier.mult.toFixed(1)}x in ${loyaltyNextTier.daysLeft}d` : ' · max tier 🏆'}
                 </div>
               )}
               <p className="loyalty-note">Streak bonus up to +0.3x · Resets on full withdrawal</p>
