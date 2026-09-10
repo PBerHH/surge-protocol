@@ -74,8 +74,11 @@ Points track early adoption and loyalty. They determine your allocation in a pot
 ### What happens to my points if I withdraw?
 - **Full withdrawal:** Loyalty multiplier resets to 1.0×, but your Early Bird/Pioneer tier remains
 
+### Do points affect my chances in draws?
+No. Draw chances are determined by tickets, not Points. Points reward early adopters through multipliers and leaderboard status, while your tickets determine your entries in each draw.
+
 ### When is the token airdrop?
-TBD, and not guaranteed. The points system is live now to track early supporters.
+The SURGE token airdrop is planned as part of the protocol's broader rewards ecosystem. Airdrop details, including timing and allocation, will be announced as the rollout takes shape.
 
 ---
 

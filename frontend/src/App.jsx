@@ -684,7 +684,7 @@ export default function App() {
                     </div>
                   )}
                   <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.35)", marginTop: "0.6rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(245,200,66,0.1)", lineHeight: 1.5 }}>
-                    Points = stake × multiplier × time, shown on the leaderboard. Early Bird / Pioneer status locks your multiplier in <b style={{ color: "rgba(245,200,66,0.6)" }}>forever</b> — that part's already yours, permanently. A token airdrop for active stakers is planned down the line (no guarantee on timing or amount). Points don't affect draw odds — those come from tickets, tracked separately.
+                    Points = stake × multiplier × time, shown on the leaderboard. Early Bird / Pioneer status locks your multiplier in <b style={{ color: "rgba(245,200,66,0.6)" }}>forever</b> — that part's already yours, permanently.
                   </div>
                 </div>
               )}
