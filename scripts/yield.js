@@ -7,7 +7,7 @@ import { Transaction } from '@mysten/sui/transactions';
 // from node software isn't until mid-October 2026), so no code changes were
 // needed here beyond the client import path and this URL.
 // Manual debug script — run with RPC_URL=... node scripts/yield.js (see .env.example).
-const RPC_URL = process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94';
+const RPC_URL = process.env.RPC_URL;
 
 const VAULT = '0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5';
 const HAEDAL_PKG = '0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d';

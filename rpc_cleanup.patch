@@ -1,0 +1,186 @@
+diff --git a/frontend/src/main.jsx b/frontend/src/main.jsx
+index 3013b1a..af6b60b 100644
+--- a/frontend/src/main.jsx
++++ b/frontend/src/main.jsx
+@@ -11,20 +11,15 @@ const queryClient = new QueryClient();
+ // Sui's official public JSON-RPC endpoints were disabled the week of July 27,
+ // 2026 (ecosystem-wide migration to gRPC/GraphQL) — getFullnodeUrl("mainnet")
+ // now points at a dead endpoint. Chainstack still serves JSON-RPC during the
+-// transition (full removal from node software isn't until mid-Oct 2026), so
+-// pointing directly at that URL restores the site with zero other changes.
++// transition (full removal from node software isn't until mid-Oct 2026).
+ //
+-// URL comes from a Vite build-time env var (set VITE_RPC_URL in Vercel
+-// project settings) instead of being committed to source. Keep the same
+-// token-in-path format Chainstack issues — a prior attempt to switch to a
+-// Basic-Auth (user:pass@) URL broke prod, since both browser fetch() and
+-// Node's undici reject URLs with embedded credentials per the Fetch spec.
+-// The fallback below is only a safety net for local dev before the env var
+-// is set; once VITE_RPC_URL is live on Vercel this hardcoded value is dead
+-// code and should be deleted (and the token rotated in the Chainstack
+-// dashboard, since it was previously exposed in git history).
++// URL comes from a Vite build-time env var — VITE_RPC_URL is set in Vercel
++// project settings, confirmed live 11.09. Keep the same token-in-path format
++// Chainstack issues — a prior attempt to switch to a Basic-Auth (user:pass@)
++// URL broke prod, since browser fetch() rejects URLs with embedded
++// credentials per the Fetch spec.
+ const networks = {
+-  mainnet: { url: import.meta.env.VITE_RPC_URL || "https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94" },
++  mainnet: { url: import.meta.env.VITE_RPC_URL },
+ };
+ 
+ ReactDOM.createRoot(document.getElementById("root")).render(
+diff --git a/rpc_env_migration.patch b/rpc_env_migration.patch
+deleted file mode 100644
+index 0572751..0000000
+--- a/rpc_env_migration.patch
++++ /dev/null
+@@ -1,96 +0,0 @@
+-diff --git a/frontend/.env.example b/frontend/.env.example
+-new file mode 100644
+-index 0000000..89debc2
+---- /dev/null
+-+++ b/frontend/.env.example
+-@@ -0,0 +1,7 @@
+-+# Copy to frontend/.env for local dev (never commit .env — already gitignored).
+-+# In Vercel: Project Settings -> Environment Variables -> add VITE_RPC_URL.
+-+# Must be prefixed with VITE_ or Vite won't expose it to the browser build.
+-+# Note: this value ends up in the shipped JS bundle (visible in browser
+-+# devtools) same as before -- moving it here only gets it out of git/GitHub,
+-+# it does not make it secret from site visitors. That's expected/normal.
+-+VITE_RPC_URL=https://sui-mainnet.core.chainstack.com/<your-token-here>
+-diff --git a/frontend/src/main.jsx b/frontend/src/main.jsx
+-index 277dd00..3013b1a 100644
+---- a/frontend/src/main.jsx
+-+++ b/frontend/src/main.jsx
+-@@ -13,8 +13,18 @@ const queryClient = new QueryClient();
+- // now points at a dead endpoint. Chainstack still serves JSON-RPC during the
+- // transition (full removal from node software isn't until mid-Oct 2026), so
+- // pointing directly at that URL restores the site with zero other changes.
+-+//
+-+// URL comes from a Vite build-time env var (set VITE_RPC_URL in Vercel
+-+// project settings) instead of being committed to source. Keep the same
+-+// token-in-path format Chainstack issues — a prior attempt to switch to a
+-+// Basic-Auth (user:pass@) URL broke prod, since both browser fetch() and
+-+// Node's undici reject URLs with embedded credentials per the Fetch spec.
+-+// The fallback below is only a safety net for local dev before the env var
+-+// is set; once VITE_RPC_URL is live on Vercel this hardcoded value is dead
+-+// code and should be deleted (and the token rotated in the Chainstack
+-+// dashboard, since it was previously exposed in git history).
+- const networks = {
+--  mainnet: { url: "https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94" },
+-+  mainnet: { url: import.meta.env.VITE_RPC_URL || "https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94" },
+- };
+- 
+- ReactDOM.createRoot(document.getElementById("root")).render(
+-diff --git a/scripts/.env.example b/scripts/.env.example
+-new file mode 100644
+-index 0000000..5389457
+---- /dev/null
+-+++ b/scripts/.env.example
+-@@ -0,0 +1,12 @@
+-+# Copy to scripts/.env for local dev (never commit .env — already gitignored).
+-+# In Fly.io: fly secrets set RPC_URL="..." -a surge-crank
+-+#            fly secrets set RPC_URL="..." -a surge-points
+-+RPC_URL=https://sui-mainnet.core.chainstack.com/<your-token-here>
+-+
+-+# Existing required vars (crank.js / points-worker.js) — unchanged, listed
+-+# here for completeness so this file is a full local-dev template.
+-+NETWORK=mainnet
+-+PACKAGE_ID=
+-+PACKAGE_TYPE_ID=
+-+SUPABASE_URL=
+-+SUPABASE_SECRET_KEY=
+-diff --git a/scripts/crank.js b/scripts/crank.js
+-index 745d577..15626dc 100644
+---- a/scripts/crank.js
+-+++ b/scripts/crank.js
+-@@ -673,7 +673,7 @@ async function main() {
+-     process.exit(1);
+-   }
+- 
+--  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94' : getFullnodeUrl(NETWORK) });
+-+  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? (process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94') : getFullnodeUrl(NETWORK) });
+-   wrapClientWithTimeout(client, RPC_TIMEOUT_MS);
+-   console.log(`   RPC timeout: ${RPC_TIMEOUT_MS / 1000}s per call`);
+-   const keypair = loadKeypair();
+-diff --git a/scripts/yield.js b/scripts/yield.js
+-index 4a2d401..cb50e42 100644
+---- a/scripts/yield.js
+-+++ b/scripts/yield.js
+-@@ -6,7 +6,8 @@ import { Transaction } from '@mysten/sui/transactions';
+- // JSON-RPC-compatible endpoint during the transition (full JSON-RPC removal
+- // from node software isn't until mid-October 2026), so no code changes were
+- // needed here beyond the client import path and this URL.
+--const RPC_URL = 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94';
+-+// Manual debug script — run with RPC_URL=... node scripts/yield.js (see .env.example).
+-+const RPC_URL = process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94';
+- 
+- const VAULT = '0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5';
+- const HAEDAL_PKG = '0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d';
+-diff --git a/scripts/yield.mjs b/scripts/yield.mjs
+-index 4a2d401..6c6dddb 100644
+---- a/scripts/yield.mjs
+-+++ b/scripts/yield.mjs
+-@@ -6,7 +6,8 @@ import { Transaction } from '@mysten/sui/transactions';
+- // JSON-RPC-compatible endpoint during the transition (full JSON-RPC removal
+- // from node software isn't until mid-October 2026), so no code changes were
+- // needed here beyond the client import path and this URL.
+--const RPC_URL = 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94';
+-+// Manual debug script — run with RPC_URL=... node scripts/yield.mjs (see .env.example).
+-+const RPC_URL = process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94';
+- 
+- const VAULT = '0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5';
+- const HAEDAL_PKG = '0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d';
+diff --git a/scripts/crank.js b/scripts/crank.js
+index 15626dc..cbbb1d3 100644
+--- a/scripts/crank.js
++++ b/scripts/crank.js
+@@ -673,7 +673,7 @@ async function main() {
+     process.exit(1);
+   }
+ 
+-  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? (process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94') : getFullnodeUrl(NETWORK) });
++  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? process.env.RPC_URL : getFullnodeUrl(NETWORK) });
+   wrapClientWithTimeout(client, RPC_TIMEOUT_MS);
+   console.log(`   RPC timeout: ${RPC_TIMEOUT_MS / 1000}s per call`);
+   const keypair = loadKeypair();
+diff --git a/scripts/points-worker.js b/scripts/points-worker.js
+index 692728a..40e976d 100644
+--- a/scripts/points-worker.js
++++ b/scripts/points-worker.js
+@@ -23,7 +23,7 @@ if (!PACKAGE_ID || !SUPABASE_URL || !SUPABASE_SECRET_KEY) {
+ // transition (full removal isn't until mid-Oct 2026). Same fix as crank.js
+ // and frontend/src/main.jsx.
+ const RPC_URL = process.env.RPC_URL || (NETWORK === 'mainnet'
+-  ? 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94'
++  ? undefined
+   : getFullnodeUrl(NETWORK));
+ 
+ const sui = new SuiClient({ url: RPC_URL });
+diff --git a/scripts/yield.js b/scripts/yield.js
+index cb50e42..0c573bf 100644
+--- a/scripts/yield.js
++++ b/scripts/yield.js
+@@ -7,7 +7,7 @@ import { Transaction } from '@mysten/sui/transactions';
+ // from node software isn't until mid-October 2026), so no code changes were
+ // needed here beyond the client import path and this URL.
+ // Manual debug script — run with RPC_URL=... node scripts/yield.js (see .env.example).
+-const RPC_URL = process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94';
++const RPC_URL = process.env.RPC_URL;
+ 
+ const VAULT = '0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5';
+ const HAEDAL_PKG = '0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d';
+diff --git a/scripts/yield.mjs b/scripts/yield.mjs
+index 6c6dddb..9d8c772 100644
+--- a/scripts/yield.mjs
++++ b/scripts/yield.mjs
+@@ -7,7 +7,7 @@ import { Transaction } from '@mysten/sui/transactions';
+ // from node software isn't until mid-October 2026), so no code changes were
+ // needed here beyond the client import path and this URL.
+ // Manual debug script — run with RPC_URL=... node scripts/yield.mjs (see .env.example).
+-const RPC_URL = process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94';
++const RPC_URL = process.env.RPC_URL;
+ 
+ const VAULT = '0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5';
+ const HAEDAL_PKG = '0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d';
