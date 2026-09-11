@@ -673,7 +673,7 @@ async function main() {
     process.exit(1);
   }
 
-  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94' : getFullnodeUrl(NETWORK) });
+  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? (process.env.RPC_URL || 'https://sui-mainnet.core.chainstack.com/396f310746ca72e8a7912556ef34da94') : getFullnodeUrl(NETWORK) });
   wrapClientWithTimeout(client, RPC_TIMEOUT_MS);
   console.log(`   RPC timeout: ${RPC_TIMEOUT_MS / 1000}s per call`);
   const keypair = loadKeypair();
