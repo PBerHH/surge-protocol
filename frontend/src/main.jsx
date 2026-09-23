@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { SuiClientProvider, WalletProvider } from "@mysten/dapp-kit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
+import BonusBanner from "./BonusBanner";
 import "./index.css";
 import "@mysten/dapp-kit/dist/index.css";
 
@@ -27,6 +28,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <QueryClientProvider client={queryClient}>
       <SuiClientProvider networks={networks} defaultNetwork="mainnet">
         <WalletProvider autoConnect>
+          <BonusBanner />
           <App />
         </WalletProvider>
       </SuiClientProvider>

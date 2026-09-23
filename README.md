@@ -180,3 +180,13 @@ node crank.js
 ## Built for Sui Overflow 2026
 
 Surge Protocol was built for the Sui Overflow 2026 hackathon.
+
+## Bonus Draw Rules
+
+- **Prize:** 25 SUI, paid by the Surge team to one winner. Normal prize pools continue unchanged.
+- **Eligibility:** wallet with at least 10 SUI staked in Surge continuously from Oct 1, 2026 23:59 UTC to Oct 8, 2026 12:00 UTC.
+- **Tickets:** 1 per whole SUI of the lowest staked balance in that window.
+- **Draw:** tickets ordered by wallet address (ascending). Winning ticket = digest of the first Sui Mainnet checkpoint after Oct 8, 2026 12:00 UTC, read as an integer, modulo total tickets.
+- **Transparency:** eligible wallets and ticket counts are published before the draw; anyone can recompute the result.
+- **Excluded:** team wallets `0x0baa87509dbe704c0932b664bed03b4ac4afe0015fe40a83a6a9d7d2a4fc183b` and `0x2a587fd1789212292af4337cacdc7bcbca496e01a6538f46c08968d41d6a83c0`.
+- No purchase necessary. Principal stays fully withdrawable at any time; withdrawing before the snapshot only removes eligibility.
