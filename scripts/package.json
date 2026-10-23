@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@mysten/graphql-transport": "^0.4.3",
-    "@mysten/sui": "^1.45.2",
+    "@mysten/sui": "^2.37.0",
     "@supabase/supabase-js": "^2.106.1",
     "dotenv": "^17.4.2",
     "node-cron": "^4.2.1",

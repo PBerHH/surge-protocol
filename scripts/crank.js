@@ -1,10 +1,9 @@
 require('dotenv/config');
 
-const { SuiGraphQLClient } = require('@mysten/sui/graphql');
-const { bcs } = require('@mysten/sui/bcs');
+const { SuiGraphQLClient } = require('@mysten/sui/graphql');   // @mysten/sui v2 (Node >= 22)
 const { Transaction } = require('@mysten/sui/transactions');
 const { Ed25519Keypair } = require('@mysten/sui/keypairs/ed25519');
-const { fromB64, fromBase64, toBase64, normalizeSuiAddress } = require('@mysten/sui/utils');
+const { fromBase64, normalizeSuiAddress } = require('@mysten/sui/utils');
 const fs = require('fs');
 const os = require('os');
 
@@ -12,12 +11,13 @@ const os = require('os');
 // Sui Mainnet JSON-RPC was switched off (node v1.82, Oct 2026). This adapter
 // re-implements exactly the JSON-RPC client methods this crank uses, on top of
 // the Sui GraphQL RPC, returning the SAME response shapes — so the draw /
-// harvest logic below stays untouched.
+// harvest logic below stays untouched. Transaction building, gas selection,
+// simulation and execution go through the SDK v2 GraphQL client.
 
 const GQL_URL = process.env.GQL_URL ?? 'https://graphql.mainnet.sui.io/graphql';
 
 function createGqlClient(url = GQL_URL) {
-  const sdk = new SuiGraphQLClient({ url, network: 'mainnet' }); // tx build + execute
+  const sdk = new SuiGraphQLClient({ url, network: 'mainnet' });
 
   async function gql(query, variables = {}) {
     const r = await fetch(url, {
@@ -32,39 +32,15 @@ function createGqlClient(url = GQL_URL) {
     return json.data;
   }
 
-  function fmtLocation(loc) {
-    const m = loc?.module;
-    return m ? `${m.address}::${m.name}::${loc.function_name ?? loc.function ?? '?'}` : JSON.stringify(loc);
-  }
-
-  // Reproduce JSON-RPC style error strings, e.g. "MoveAbort(0x..::staking::claim, 6)"
-  // — claimMaturedTickets() matches the abort code at the end of this string.
-  function failureString(effectsBcs) {
-    try {
-      const raw = bcs.TransactionEffects.parse(effectsBcs);
-      const st = (raw.V2 ?? raw.V1)?.status;
-      const err = st?.Failed?.error;
-      if (!err) return 'unknown failure';
-      if (err.$kind === 'MoveAbort') return `MoveAbort(${fmtLocation(err.MoveAbort[0])}, ${err.MoveAbort[1]})`;
-      return `${err.$kind}(${JSON.stringify(err[err.$kind], (_, v) => typeof v === 'bigint' ? v.toString() : v)})`;
-    } catch (e) {
-      return `unparsed failure (${e.message})`;
+  // JSON-RPC style error string, e.g. "MoveAbort(0x..::interface::claim_v2, 6)".
+  // claimMaturedTickets() matches the abort code at the end of this string.
+  function errorString(err) {
+    if (!err) return 'unknown failure';
+    if (err.$kind === 'MoveAbort' && err.MoveAbort) {
+      const l = err.MoveAbort.location ?? {};
+      return `MoveAbort(${l.package ?? '?'}::${l.module ?? '?'}::${l.functionName ?? '?'}, ${err.MoveAbort.abortCode})`;
     }
-  }
-
-  async function fetchEvents(digest) {
-    // Best-effort, only used for log output. Retry while the indexer catches up.
-    for (let i = 0; i < 5; i++) {
-      try {
-        const d = await gql(`query($d:String!){ transaction(digest:$d){ effects{ events(first:50){ nodes{ contents{ type{repr} json } } } } } }`, { d: digest });
-        const nodes = d?.transaction?.effects?.events?.nodes;
-        if (nodes) return nodes.map(n => ({ type: n.contents?.type?.repr, parsedJson: n.contents?.json }));
-      } catch (e) {
-        if (i === 4) console.error('  ⚠️ event lookup failed:', e.message);
-      }
-      await new Promise(r => setTimeout(r, 2000));
-    }
-    return [];
+    return err.message ?? err.$kind ?? JSON.stringify(err);
   }
 
   return {
@@ -111,34 +87,36 @@ function createGqlClient(url = GQL_URL) {
     // Read-only call; returns JSON-RPC-shaped results[i].returnValues[j] = [bytes[], type]
     async devInspectTransactionBlock({ sender, transactionBlock }) {
       transactionBlock.setSenderIfNotSet(sender);
-      const bytes = await transactionBlock.build({ client: sdk });
-      const d = await gql(
-        `query($tx:JSON!){ simulateTransaction(transaction:$tx){ error outputs{ returnValues{ value{ bcs } type{ repr } } } } }`,
-        { tx: { bcs: { value: toBase64(bytes) } } },
-      );
-      const sim = d?.simulateTransaction;
-      if (sim?.error) throw new Error('simulate: ' + sim.error);
+      const res = await sdk.core.simulateTransaction({
+        transaction: transactionBlock,
+        checksEnabled: false,
+        include: { commandResults: true },
+      });
+      if (res.$kind === 'FailedTransaction') throw new Error('simulate: ' + errorString(res.FailedTransaction?.status?.error));
       return {
-        results: (sim?.outputs ?? []).map(o => ({
-          returnValues: (o?.returnValues ?? []).map(rv => [Array.from(fromBase64(rv.value.bcs)), rv.type?.repr]),
+        results: (res.commandResults ?? []).map(o => ({
+          returnValues: (o.returnValues ?? []).map(rv => [rv.bcs ? Array.from(rv.bcs) : null, null]),
         })),
       };
     },
 
     async signAndExecuteTransaction({ signer, transaction }) {
-      transaction.setSenderIfNotSet(signer.toSuiAddress());
-      const bytes = await transaction.build({ client: sdk });
-      const { signature } = await signer.signTransaction(bytes);
-      const { transaction: t } = await sdk.core.executeTransaction({ transaction: bytes, signatures: [signature] });
-      const ok = !!t.effects?.status?.success;
-      const events = await fetchEvents(t.digest);
+      const res = await sdk.core.signAndExecuteTransaction({
+        signer,
+        transaction,
+        include: { effects: true, events: true, balanceChanges: true },
+      });
+      const t = res.Transaction ?? res.FailedTransaction;
+      // Wait until the tx is indexed so the next tx in this tick resolves
+      // fresh object versions (gas coin, caps, pools).
+      try { await sdk.core.waitForTransaction({ digest: t.digest }); } catch {}
       return {
         digest: t.digest,
         effects: {
-          status: ok ? { status: 'success' } : { status: 'failure', error: failureString(t.effects.bcs) },
+          status: t.status?.success ? { status: 'success' } : { status: 'failure', error: errorString(t.status?.error) },
           gasUsed: t.effects?.gasUsed,
         },
-        events,
+        events: (t.events ?? []).map(e => ({ type: e.eventType, parsedJson: e.json })),
         balanceChanges: (t.balanceChanges ?? []).map(bc => ({
           coinType: /^0x0*2::sui::SUI$/.test(bc.coinType ?? '') ? '0x2::sui::SUI' : bc.coinType,
           owner: { AddressOwner: bc.address ? normalizeSuiAddress(bc.address) : null },
@@ -222,13 +200,13 @@ function wrapClientWithTimeout(client, ms) {
 
 function loadKeypair() {
   if (process.env.PRIVATE_KEY_B64) {
-    const raw = fromB64(process.env.PRIVATE_KEY_B64);
+    const raw = fromBase64(process.env.PRIVATE_KEY_B64);
     const secret = raw.length === 33 ? raw.slice(1) : raw;
     return Ed25519Keypair.fromSecretKey(secret);
   }
   const keystorePath = `${os.homedir()}/.sui/sui_config/sui.keystore`;
   const keystore = JSON.parse(fs.readFileSync(keystorePath, 'utf-8'));
-  const raw = fromB64(keystore[0]);
+  const raw = fromBase64(keystore[0]);
   const secret = raw.length === 33 ? raw.slice(1) : raw;
   return Ed25519Keypair.fromSecretKey(secret);
 }
