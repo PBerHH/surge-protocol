@@ -5,6 +5,7 @@ import { Transaction } from "@mysten/sui/transactions";
 // ── Contract Config ───────────────────────────────────────────────────────────
 const PKG_CALL    = "0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c";
 const PACKAGE     = "0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb";
+const PACKAGE_TYPE_ID = "0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3"; // original-id: struct + event types
 const VAULT       = "0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8ab702562";
 const DRAW_STATE  = "0xee9f68a29ab16442600a9e12426431b240aed97cdf5108f44d8325401cc25fb0";
 const REWARD_POOL = "0xacf68b636a55c96a8269ab0b66d735a7bbfadf058821cc17f97bc32d49d6968f";
@@ -61,13 +62,11 @@ async function fetchObject(id) {
   const data = await gql(`
     query GetObject($id: SuiAddress!) {
       object(address: $id) {
-        contents {
-          json
-        }
+        asMoveObject { contents { json } }
       }
     }
   `, { id });
-  const json = data?.object?.contents?.json;
+  const json = data?.object?.asMoveObject?.contents?.json;
   if (!json) return null;
   try { return typeof json === "string" ? JSON.parse(json) : json; } catch { return null; }
 }
@@ -77,12 +76,10 @@ async function fetchOwnedObjects(owner, structType) {
   const data = await gql(`
     query OwnedObjects($owner: SuiAddress!, $type: String!) {
       address(address: $owner) {
-        objects(filter: { type: $type }) {
+        objects(first: 50, filter: { type: $type }) {
           nodes {
             objectId: address
-            contents {
-              json
-            }
+            asMoveObject { contents { json } }
           }
         }
       }
@@ -90,7 +87,7 @@ async function fetchOwnedObjects(owner, structType) {
   `, { owner, type: structType });
   const nodes = data?.address?.objects?.nodes ?? [];
   return nodes.map(n => {
-    const json = n.contents?.json;
+    const json = n.asMoveObject?.contents?.json;
     let fields = null;
     try { fields = typeof json === "string" ? JSON.parse(json) : json; } catch {}
     return fields ? { ...fields, objectId: n.objectId } : null;
@@ -101,13 +98,10 @@ async function fetchOwnedObjects(owner, structType) {
 async function queryEvents(eventType, limit = 20) {
   const data = await gql(`
     query Events($type: String!, $limit: Int!) {
-      events(filter: { eventType: $type }, last: $limit) {
+      events(filter: { type: $type }, last: $limit) {
         nodes {
-          sendingModule { package { address } name }
-          type { repr }
           contents { json }
           timestamp
-          transactionBlock { digest }
         }
       }
     }
@@ -115,7 +109,7 @@ async function queryEvents(eventType, limit = 20) {
   return (data?.events?.nodes ?? []).map(n => {
     let parsed = null;
     try { parsed = typeof n.contents?.json === "string" ? JSON.parse(n.contents.json) : n.contents?.json; } catch {}
-    return { type: n.type?.repr, parsedJson: parsed, timestampMs: n.timestamp ? new Date(n.timestamp).getTime().toString() : "0" };
+    return { type: eventType, parsedJson: parsed, timestampMs: n.timestamp ? new Date(n.timestamp).getTime().toString() : "0" };
   });
 }
 
@@ -271,7 +265,7 @@ export default function App() {
   const fetchLastWinners = useCallback(async () => {
     try {
       const [ev1, ev2] = await Promise.all([
-        queryEvents(`${PACKAGE}::reward_pool::PrizeAwarded`, 20),
+        queryEvents(`${PACKAGE_TYPE_ID}::reward_pool::PrizeAwarded`, 20),
         queryEvents(`${PKG_CALL}::reward_pool::PrizeAwarded`, 20),
       ]);
       const all = [...ev1, ...ev2];
@@ -297,7 +291,7 @@ export default function App() {
     if (!account?.address) return;
     try {
       const [r1, r2] = await Promise.all([
-        fetchOwnedObjects(account.address, `${PACKAGE}::stake_vault::StakingReceipt`),
+        fetchOwnedObjects(account.address, `${PACKAGE_TYPE_ID}::stake_vault::StakingReceipt`),
         fetchOwnedObjects(account.address, `${PKG_CALL}::stake_vault::StakingReceipt`),
       ]);
       setUserReceipts([...r1, ...r2]);
@@ -324,7 +318,7 @@ export default function App() {
     if (!account?.address) return;
     try {
       const [r1, r2] = await Promise.all([
-        fetchOwnedObjects(account.address, `${PACKAGE}::loyalty_tracker::LoyaltyRecord`),
+        fetchOwnedObjects(account.address, `${PACKAGE_TYPE_ID}::loyalty_tracker::LoyaltyRecord`),
         fetchOwnedObjects(account.address, `${PKG_CALL}::loyalty_tracker::LoyaltyRecord`),
       ]);
       const objs = [...r1, ...r2];
@@ -369,7 +363,7 @@ export default function App() {
     if (!account?.address) return;
     try {
       const [ev1, ev2] = await Promise.all([
-        queryEvents(`${PACKAGE}::reward_pool::PrizeAwarded`, 50),
+        queryEvents(`${PACKAGE_TYPE_ID}::reward_pool::PrizeAwarded`, 50),
         queryEvents(`${PKG_CALL}::reward_pool::PrizeAwarded`, 50),
       ]);
       const all = [...ev1, ...ev2];
@@ -510,7 +504,7 @@ export default function App() {
     if (!account) return;
     setTxStatus({ type: "pending", msg: "Preparing withdrawal..." });
     try {
-      const loyaltyObjs = await fetchOwnedObjects(account.address, `${PACKAGE}::loyalty_tracker::LoyaltyRecord`);
+      const loyaltyObjs = await fetchOwnedObjects(account.address, `${PACKAGE_TYPE_ID}::loyalty_tracker::LoyaltyRecord`);
       const hasRecord = loyaltyObjs.length > 0;
       const tx = new Transaction();
       tx.setGasPrice(1000);
