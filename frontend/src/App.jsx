@@ -79,7 +79,7 @@ async function fetchOwnedObjects(owner, structType) {
         objects(first: 50, filter: { type: $type }) {
           nodes {
             objectId: address
-            asMoveObject { contents { json } }
+            contents { json }
           }
         }
       }
@@ -87,7 +87,7 @@ async function fetchOwnedObjects(owner, structType) {
   `, { owner, type: structType });
   const nodes = data?.address?.objects?.nodes ?? [];
   return nodes.map(n => {
-    const json = n.asMoveObject?.contents?.json;
+    const json = n.contents?.json;
     let fields = null;
     try { fields = typeof json === "string" ? JSON.parse(json) : json; } catch {}
     return fields ? { ...fields, objectId: n.objectId } : null;
