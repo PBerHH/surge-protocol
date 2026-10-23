@@ -1,6 +1,5 @@
 require('dotenv/config');
 
-const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
 const cron = require('node-cron');
@@ -17,16 +16,58 @@ if (!PACKAGE_ID || !SUPABASE_URL || !SUPABASE_SECRET_KEY) {
   process.exit(1);
 }
 
-// Sui's official public JSON-RPC endpoints were disabled the week of July 27,
-// 2026 (ecosystem-wide migration to gRPC/GraphQL) — getFullnodeUrl(NETWORK)
-// now points at a dead endpoint. Chainstack still serves JSON-RPC during the
-// transition (full removal isn't until mid-Oct 2026). Same fix as crank.js
-// and frontend/src/main.jsx.
-const RPC_URL = process.env.RPC_URL || (NETWORK === 'mainnet'
-  ? undefined
-  : getFullnodeUrl(NETWORK));
+// Sui Mainnet JSON-RPC was switched off (node v1.82, Oct 2026). This worker
+// only READS chain data, so it talks to the Sui GraphQL RPC directly via
+// fetch — no SDK needed. The two methods below mirror the JSON-RPC response
+// shapes the code further down expects.
+const GQL_URL = process.env.GQL_URL ?? 'https://graphql.mainnet.sui.io/graphql';
+const GQL_TIMEOUT_MS = 60_000;
 
-const sui = new SuiClient({ url: RPC_URL });
+async function gql(query, variables = {}) {
+  const r = await fetch(GQL_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(GQL_TIMEOUT_MS),
+  });
+  const text = await r.text();
+  let json;
+  try { json = JSON.parse(text); } catch { throw new Error(`GraphQL HTTP ${r.status}: ${text.slice(0, 200)}`); }
+  if (json.errors?.length) throw new Error('GraphQL: ' + json.errors.map(e => e.message).join('; '));
+  return json.data;
+}
+
+const sui = {
+  async queryEvents({ query, limit = 50, cursor = null }) {
+    const d = await gql(
+      `query($t:String!,$n:Int!,$a:String){ events(first:$n, after:$a, filter:{type:$t}){ pageInfo{ hasNextPage endCursor } nodes{ contents{ json } timestamp } } }`,
+      { t: query.MoveEventType, n: Math.min(limit, 50), a: cursor },
+    );
+    const ev = d?.events;
+    return {
+      data: (ev?.nodes ?? []).map(n => ({
+        parsedJson: n.contents?.json,
+        timestampMs: n.timestamp ? String(new Date(n.timestamp).getTime()) : null,
+      })),
+      hasNextPage: !!ev?.pageInfo?.hasNextPage,
+      nextCursor: ev?.pageInfo?.endCursor ?? null,
+    };
+  },
+
+  async getOwnedObjects({ owner, filter, cursor = null }) {
+    const d = await gql(
+      `query($o:SuiAddress!,$t:String!,$a:String){ address(address:$o){ objects(first:50, after:$a, filter:{type:$t}){ pageInfo{ hasNextPage endCursor } nodes{ address contents{ json } } } } }`,
+      { o: owner, t: filter.StructType, a: cursor },
+    );
+    const objs = d?.address?.objects;
+    return {
+      data: (objs?.nodes ?? []).map(n => ({ data: { objectId: n.address, content: { fields: n.contents?.json } } })),
+      hasNextPage: !!objs?.pageInfo?.hasNextPage,
+      nextCursor: objs?.pageInfo?.endCursor ?? null,
+    };
+  },
+};
+
 const db = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, { realtime: { transport: ws } });
 
 // Constants
@@ -44,12 +85,15 @@ const POINTS_PER_SUI_PER_DAY = 1.0;
 const REFERRAL_BONUS_PER_ACTIVE = 0.10;
 const REFERRAL_BONUS_CAP = 0.50;
 
-// StakingReceipt types — V5 (current receipts) + V6 (future upgrades)
+// StakingReceipt types — V5 + V6.
+// GraphQL matches struct/event types by the ORIGINAL package id (type origin),
+// not by upgraded package ids — so the V5 original id must be included.
 const PACKAGE_V5 = '0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb';
+const PACKAGE_V5_ORIG = PACKAGE_TYPE_ID || '0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3';
 const PACKAGE_V6 = process.env.V6_PACKAGE ?? '0xaf489faa2a23db82265e25c833f2cf9b985eb0a8d4acde121c7e14c111c3b62e';
+const V5_PACKAGES = [...new Set([PACKAGE_V5_ORIG, PACKAGE_V5, PACKAGE_ID])];
 const RECEIPT_TYPES = [
-  `${PACKAGE_V5}::stake_vault::StakingReceipt`,
-  `${PACKAGE_ID}::stake_vault::StakingReceipt`,
+  ...V5_PACKAGES.map(p => `${p}::stake_vault::StakingReceipt`),
   `${PACKAGE_V6}::stake_vault_v6::StakeReceiptV6`,
 ];
 
@@ -69,8 +113,7 @@ async function fetchAllStakers() {
 
   // Staked events only give us candidate addresses + first stake time — V5 + V6
   const EVENT_TYPES = [
-    `${PACKAGE_V5}::stake_vault::Staked`,
-    `${PACKAGE_ID}::stake_vault::Staked`,
+    ...V5_PACKAGES.map(p => `${p}::stake_vault::Staked`),
     `${PACKAGE_V6}::stake_vault_v6::StakedV6`,
   ];
   for (const eventType of EVENT_TYPES) {
@@ -282,9 +325,9 @@ async function calculateAndUpdatePoints() {
 }
 
 async function main() {
-  console.log('🏆 Surge Points Worker v2 — referral bonuses + Chainstack RPC');
+  console.log('🏆 Surge Points Worker v3 — referral bonuses + Sui GraphQL');
   console.log(`   Network:  ${NETWORK}`);
-  console.log(`   RPC:      ${RPC_URL}`);
+  console.log(`   GraphQL:  ${GQL_URL}`);
   console.log(`   Package:  ${PACKAGE_ID.slice(0, 10)}...`);
   console.log(`   Supabase: ${SUPABASE_URL}`);
 
@@ -299,4 +342,8 @@ async function main() {
   console.log('\n⏳ Worker running. Next tick at start of next hour.\n');
 }
 
-main().catch(e => { console.error('Fatal:', e); process.exit(1); });
+if (require.main === module) {
+  main().catch(e => { console.error('Fatal:', e); process.exit(1); });
+}
+
+module.exports = { sui, fetchAllStakers };
