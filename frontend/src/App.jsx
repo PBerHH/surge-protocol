@@ -1,33 +1,124 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ConnectButton, useCurrentAccount, useSuiClient, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
+import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 
-// ── Contract Config (V5 — real native staking via Triton) ───────────────────
-// moveCalls target the LATEST package (PKG_CALL). StructType filters + event
-// queries use the V5 ORIGINAL package id (PACKAGE) where types/events were first
-// defined — confirmed against the crank & points-worker (PACKAGE_V5 = 0x35732358).
-const PKG_CALL    = "0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c"; // moveCalls
-const PACKAGE     = "0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb"; // V5 types + events
-const VAULT       = "0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8ab702562"; // V5 StakingVault
+// ── Contract Config ───────────────────────────────────────────────────────────
+const PKG_CALL    = "0x4ca98688e6cdf7fb6b73cc01d5ebbf77f947a02f5da570afd2f14bf155942b0c";
+const PACKAGE     = "0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb";
+const VAULT       = "0x50d8b86e95c8c75892e8cc7caa39a81604de123baf1528cf1c9203d8ab702562";
 const DRAW_STATE  = "0xee9f68a29ab16442600a9e12426431b240aed97cdf5108f44d8325401cc25fb0";
 const REWARD_POOL = "0xacf68b636a55c96a8269ab0b66d735a7bbfadf058821cc17f97bc32d49d6968f";
 
-// ── V6 (haSUI yield engine — live on mainnet, primary stake target) ─────────
 const V6_PACKAGE = "0xaf489faa2a23db82265e25c833f2cf9b985eb0a8d4acde121c7e14c111c3b62e";
 const V6_VAULT   = "0xcc6a5e55e3099b2b9d777b9f51b6a5807a03888c613be0b401468a94cc3f1ba5";
-// Haedal (verified on mainnet): types/events live in ORIG, calls route to LATEST
 const HAEDAL_STAKING    = "0x47b224762220393057ebf4f70501b6e657c3e56684737568439a04f80849b2ca";
 const HAEDAL_PKG_ORIG   = "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d";
 const HAEDAL_PKG_LATEST = "0x126e4cfb051cad744706df590ec399e8c02b6feae195c35b8b496280d5442a62";
-// Supabase (points) — paste the anon/public key from Supabase → Settings → API
+
 const SUPABASE_URL = "https://dqcjgvotffxutvgvahse.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxY2pndm90ZmZ4dXR2Z3ZhaHNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjI0MDQsImV4cCI6MjA5NDkzODQwNH0.J6m4cARii-VU3AQIotHY0i6hQC4HOXDZvvcE7MCyVC8";
 
-// Referral: capture ?ref=<wallet> once on first page load and remember it
-// (localStorage), so it survives navigation up to the moment the visitor
-// actually stakes. A referral is only ever recorded once per NEW wallet
-// (enforced server-side by a unique constraint on referred_address), so this
-// capture is harmless even if the same link is opened many times.
+const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
+const LEGACY_VAULT    = "0x0aa9c18818087b3e9e32c6eef8f3b17ce98670d5ac00eb54fd559d0d98db76be";
+const LEGACY2_PACKAGE = "0x51ce7917adc5b9d7e7faa5988dfbbc1e2abbac5ae14cb38834f23e9a1d6109dc";
+const LEGACY2_VAULT   = "0x0430bf6c920033e5df27a371071a2f54844da65a103d08e35fb316eaa7134db9";
+const LEGACY3_PACKAGE = "0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50";
+const LEGACY3_VAULT   = "0x5cd4c73e20d876b1105fa49049e1ee903e9eac382867ce1d597719c5877e6a26";
+const LEGACY4_PACKAGE = "0x53a50af7d0aeb7190f5b06031b33dc3fb68859c00a767fc6683e6d8c406e2be0";
+const LEGACY4_VAULT   = "0x64df43a049c9b24720e9aaa8939072907dda5cca69a7e557424b541ad16071e5";
+
+// ── GraphQL proxy URL (our Fly.io proxy, avoids CORS) ────────────────────────
+const PROXY = import.meta.env.VITE_RPC_URL || "https://surge-rpc-proxy.fly.dev";
+
+async function gql(query, variables = {}) {
+  const r = await fetch(`${PROXY}/graphql`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await r.json();
+  if (json.errors) throw new Error(json.errors[0].message);
+  return json.data;
+}
+
+// Parse object content fields from GraphQL response
+function parseFields(obj) {
+  const content = obj?.object?.contents;
+  if (!content) return null;
+  const fields = {};
+  if (content.type?.__typename === "MoveObject" || content.__typename === "MoveObject") {
+    // fields come as JSON string in some endpoints
+  }
+  // Try to parse from json field
+  if (content.json) {
+    try { return JSON.parse(content.json); } catch { return content.json; }
+  }
+  return null;
+}
+
+// Fetch a single object's content via GraphQL
+async function fetchObject(id) {
+  const data = await gql(`
+    query GetObject($id: SuiAddress!) {
+      object(address: $id) {
+        contents {
+          json
+        }
+      }
+    }
+  `, { id });
+  const json = data?.object?.contents?.json;
+  if (!json) return null;
+  try { return typeof json === "string" ? JSON.parse(json) : json; } catch { return null; }
+}
+
+// Fetch owned objects of a given type
+async function fetchOwnedObjects(owner, structType) {
+  const data = await gql(`
+    query OwnedObjects($owner: SuiAddress!, $type: String!) {
+      address(address: $owner) {
+        objects(filter: { type: $type }) {
+          nodes {
+            objectId: address
+            contents {
+              json
+            }
+          }
+        }
+      }
+    }
+  `, { owner, type: structType });
+  const nodes = data?.address?.objects?.nodes ?? [];
+  return nodes.map(n => {
+    const json = n.contents?.json;
+    let fields = null;
+    try { fields = typeof json === "string" ? JSON.parse(json) : json; } catch {}
+    return fields ? { ...fields, objectId: n.objectId } : null;
+  }).filter(Boolean);
+}
+
+// Query events by event type
+async function queryEvents(eventType, limit = 20) {
+  const data = await gql(`
+    query Events($type: String!, $limit: Int!) {
+      events(filter: { eventType: $type }, last: $limit) {
+        nodes {
+          sendingModule { package { address } name }
+          type { repr }
+          contents { json }
+          timestamp
+          transactionBlock { digest }
+        }
+      }
+    }
+  `, { type: eventType, limit });
+  return (data?.events?.nodes ?? []).map(n => {
+    let parsed = null;
+    try { parsed = typeof n.contents?.json === "string" ? JSON.parse(n.contents.json) : n.contents?.json; } catch {}
+    return { type: n.type?.repr, parsedJson: parsed, timestampMs: n.timestamp ? new Date(n.timestamp).getTime().toString() : "0" };
+  });
+}
+
 if (typeof window !== "undefined") {
   const urlRef = new URLSearchParams(window.location.search).get("ref");
   if (urlRef && /^0x[a-fA-F0-9]{1,64}$/.test(urlRef) && !localStorage.getItem("surge_ref")) {
@@ -35,28 +126,14 @@ if (typeof window !== "undefined") {
   }
 }
 
-// ── Legacy Contracts (withdraw-only — let old depositors recover their SUI) ──
-const LEGACY_PACKAGE  = "0xc44d56c34b04fc54386ed2de7d757133ab77bbab60c18de3d0a1d640298f3396";
-const LEGACY_VAULT    = "0x0aa9c18818087b3e9e32c6eef8f3b17ce98670d5ac00eb54fd559d0d98db76be";
-const LEGACY2_PACKAGE = "0x51ce7917adc5b9d7e7faa5988dfbbc1e2abbac5ae14cb38834f23e9a1d6109dc";
-const LEGACY2_VAULT   = "0x0430bf6c920033e5df27a371071a2f54844da65a103d08e35fb316eaa7134db9";
-const LEGACY3_PACKAGE = "0x2755c0b895605f21f67b67f8ba58aa4b4b83759cd0d1a1fbb666ec9355c29d50";
-const LEGACY3_VAULT   = "0x5cd4c73e20d876b1105fa49049e1ee903e9eac382867ce1d597719c5877e6a26";
-// the PREVIOUS frontend deposited here (simulated Vault) — now withdraw-only:
-const LEGACY4_PACKAGE = "0x53a50af7d0aeb7190f5b06031b33dc3fb68859c00a767fc6683e6d8c406e2be0";
-const LEGACY4_VAULT   = "0x64df43a049c9b24720e9aaa8939072907dda5cca69a7e557424b541ad16071e5";
-
 function fmt(mist, dec = 3) { return (Number(BigInt(mist ?? 0)) / 1e9).toFixed(dec); }
 function fmtSui(mist) {
   const n = Number(BigInt(mist ?? 0)) / 1e9;
   if (n >= 1000) return (n / 1000).toFixed(2) + "K";
   return n.toFixed(3);
 }
-const MIN_POOL_MIST = 1_000_000n; // 0.001 SUI — crank only draws above this
+const MIN_POOL_MIST = 1_000_000n;
 
-// Pool-aware draw status: time alone doesn't make a draw "Ready" — the pool
-// must also be above the crank's minimum, otherwise nothing will fire and
-// "Ready ✓" would mislead visitors. Three honest states instead.
 function drawStatus(ms, poolMist) {
   const pool = BigInt(poolMist ?? 0);
   if (pool < MIN_POOL_MIST) return { label: "Filling — draws after next harvest", urgent: false };
@@ -144,7 +221,6 @@ function LiveDrawTicker({ drawData, poolData }) {
 
 export default function App() {
   const account = useCurrentAccount();
-  const client = useSuiClient();
   const { mutate: signAndExecute } = useSignAndExecuteTransaction();
 
   const [poolData, setPoolData] = useState(null);
@@ -173,66 +249,71 @@ export default function App() {
 
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 1000); return () => clearInterval(t); }, []);
 
+  // ── Main data fetch (objects) ─────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     try {
       const [pool, draw, vault, v6vault] = await Promise.all([
-        client.getObject({ id: REWARD_POOL, options: { showContent: true } }),
-        client.getObject({ id: DRAW_STATE, options: { showContent: true } }),
-        client.getObject({ id: VAULT, options: { showContent: true } }),
-        client.getObject({ id: V6_VAULT, options: { showContent: true } }),
+        fetchObject(REWARD_POOL),
+        fetchObject(DRAW_STATE),
+        fetchObject(VAULT),
+        fetchObject(V6_VAULT),
       ]);
-      if (pool.data?.content?.fields) setPoolData(pool.data.content.fields);
-      if (draw.data?.content?.fields) setDrawData(draw.data.content.fields);
-      if (vault.data?.content?.fields) setVaultData(vault.data.content.fields);
-      if (v6vault.data?.content?.fields) setV6VaultData(v6vault.data.content.fields);
-      try {
-        const rtx = new Transaction();
-        rtx.moveCall({ target: `${HAEDAL_PKG_ORIG}::staking::get_exchange_rate`, arguments: [rtx.object(HAEDAL_STAKING)] });
-        const ins = await client.devInspectTransactionBlock({ sender: "0x0000000000000000000000000000000000000000000000000000000000000001", transactionBlock: rtx });
-        const bytes = ins?.results?.[0]?.returnValues?.[0]?.[0];
-        if (bytes) { let v = 0n; for (let i = bytes.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i]); setHaRate(v); }
-      } catch { /* rate unavailable — panel hides itself */ }
-    } catch (e) { console.error(e); }
-  }, [client]);
+      if (pool) setPoolData(pool);
+      if (draw) setDrawData(draw);
+      if (vault) setVaultData(vault);
+      if (v6vault) setV6VaultData(v6vault);
+    } catch (e) { console.error("fetchData:", e); }
+  }, []);
 
   useEffect(() => { fetchData(); const t = setInterval(fetchData, 15000); return () => clearInterval(t); }, [fetchData]);
 
+  // ── Recent winners ────────────────────────────────────────────────────────
   const fetchLastWinners = useCallback(async () => {
     try {
-      const res = await Promise.all([PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveModule: { package: pkg, module: 'reward_pool' } }, limit: 20, order: 'descending' })));
-      const events = { data: res.flatMap(r => r.data) };
-      const winners = events.data.filter(e => e.type?.includes('PrizeAwarded') && Number(e.parsedJson?.amount_mist) > 0)
-        .map(e => ({ winner: e.parsedJson.winner, amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs }));
+      const [ev1, ev2] = await Promise.all([
+        queryEvents(`${PACKAGE}::reward_pool::PrizeAwarded`, 20),
+        queryEvents(`${PKG_CALL}::reward_pool::PrizeAwarded`, 20),
+      ]);
+      const all = [...ev1, ...ev2];
+      const winners = all
+        .filter(e => e.parsedJson?.amount_mist && Number(e.parsedJson.amount_mist) > 0)
+        .map(e => ({
+          winner: e.parsedJson.winner,
+          amount: Number(e.parsedJson.amount_mist) / 1e9,
+          pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw',
+          ts: e.timestampMs,
+        }))
+        .sort((a, b) => Number(b.ts) - Number(a.ts));
       if (prevWinnersRef.current.length > 0 && winners.length > 0 && winners[0]?.ts !== prevWinnersRef.current[0]?.ts) launchConfetti();
       prevWinnersRef.current = winners;
       setLastWinners(winners);
-    } catch (e) { console.error(e); }
-  }, [client]);
+    } catch (e) { console.error("fetchLastWinners:", e); }
+  }, []);
 
   useEffect(() => { fetchLastWinners(); const t = setInterval(fetchLastWinners, 15000); return () => clearInterval(t); }, [fetchLastWinners]);
 
+  // ── User receipts ─────────────────────────────────────────────────────────
   const fetchReceipts = useCallback(async () => {
     if (!account?.address) return;
-    // Each fetch is independent: a failure in one (e.g. an RPC quirk on the
-    // Haedal ticket filter) must NOT block the others (the v6 receipts bug).
     try {
-      const res = await Promise.all([PACKAGE, PKG_CALL].map(pkg => client.getOwnedObjects({ owner: account.address, filter: { StructType: `${pkg}::stake_vault::StakingReceipt` }, options: { showContent: true } })));
-      setUserReceipts(res.flatMap(r => r.data).map(o => o.data?.content?.fields).filter(Boolean));
+      const [r1, r2] = await Promise.all([
+        fetchOwnedObjects(account.address, `${PACKAGE}::stake_vault::StakingReceipt`),
+        fetchOwnedObjects(account.address, `${PKG_CALL}::stake_vault::StakingReceipt`),
+      ]);
+      setUserReceipts([...r1, ...r2]);
     } catch (e) { console.error("V5 receipts:", e); setUserReceipts([]); }
     try {
-      const v6res = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${V6_PACKAGE}::stake_vault_v6::StakeReceiptV6` }, options: { showContent: true } });
-      setV6Receipts(v6res.data.map(o => o.data?.content?.fields).filter(Boolean));
+      const v6res = await fetchOwnedObjects(account.address, `${V6_PACKAGE}::stake_vault_v6::StakeReceiptV6`);
+      setV6Receipts(v6res);
     } catch (e) { console.error("V6 receipts:", e); setV6Receipts([]); }
     try {
-      const tix = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${HAEDAL_PKG_ORIG}::staking::UnstakeTicket` }, options: { showContent: true } });
-      setHaTickets(tix.data.map(o => ({ id: o.data?.objectId })).filter(t => t.id));
+      const tix = await fetchOwnedObjects(account.address, `${HAEDAL_PKG_ORIG}::staking::UnstakeTicket`);
+      setHaTickets(tix.map(t => ({ id: t.objectId })).filter(t => t.id));
     } catch (e) { console.error("Haedal tickets:", e); setHaTickets([]); }
-  }, [account, client]);
+  }, [account]);
 
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
 
-  // Same tier formula as the legacy V5 LoyaltyRecord path below, factored
-  // out so both paths compute identically instead of drifting apart.
   const loyaltyFromDays = (daysStaked, streakDays = 0) => {
     let baseBp = daysStaked >= 365 ? 20000 : daysStaked >= 180 ? 18000 : daysStaked >= 90 ? 15000 : daysStaked >= 30 ? 12000 : 10000;
     const totalBp = Math.min(baseBp + Math.floor((streakDays * 3000) / 30), 20000);
@@ -242,10 +323,13 @@ export default function App() {
   const fetchLoyalty = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const res = await Promise.all([PACKAGE, PKG_CALL].map(pkg => client.getOwnedObjects({ owner: account.address, filter: { StructType: `${pkg}::loyalty_tracker::LoyaltyRecord` }, options: { showContent: true } })));
-      const objs = { data: res.flatMap(r => r.data) };
-      if (objs.data.length > 0) {
-        const f = objs.data[0].data?.content?.fields;
+      const [r1, r2] = await Promise.all([
+        fetchOwnedObjects(account.address, `${PACKAGE}::loyalty_tracker::LoyaltyRecord`),
+        fetchOwnedObjects(account.address, `${PKG_CALL}::loyalty_tracker::LoyaltyRecord`),
+      ]);
+      const objs = [...r1, ...r2];
+      if (objs.length > 0) {
+        const f = objs[0];
         if (f) {
           const daysStaked = Math.floor((Date.now() - Number(f.stake_start_ms)) / 86400000);
           const streakDays = Math.min(Number(f.streak_days ?? 0), 30);
@@ -253,11 +337,6 @@ export default function App() {
           return;
         }
       }
-      // No V5 LoyaltyRecord (expected for V6-only stakers — the V6 contract
-      // has no loyalty_tracker module). Fall back to the earliest
-      // deposit_ts_ms across this wallet's V6 receipts. Streak bonus is 0
-      // here since that data was never tracked on-chain for V6 — honest
-      // rather than fabricated.
       if (v6Receipts.length > 0) {
         const earliestMs = Math.min(...v6Receipts.map(r => Number(r.deposit_ts_ms ?? Date.now())));
         const daysStaked = Math.floor((Date.now() - earliestMs) / 86400000);
@@ -265,8 +344,8 @@ export default function App() {
       } else {
         setLoyaltyData(null);
       }
-    } catch (e) { console.error(e); }
-  }, [account, client, v6Receipts]);
+    } catch (e) { console.error("loyalty:", e); }
+  }, [account, v6Receipts]);
 
   useEffect(() => { fetchLoyalty(); }, [fetchLoyalty]);
 
@@ -274,75 +353,54 @@ export default function App() {
     if (!account?.address) return;
     try {
       const [o1, o2, o3, o4] = await Promise.all([
-        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
-        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY2_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
-        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY3_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
-        client.getOwnedObjects({ owner: account.address, filter: { StructType: `${LEGACY4_PACKAGE}::stake_vault::StakeReceipt` }, options: { showContent: true } }),
+        fetchOwnedObjects(account.address, `${LEGACY_PACKAGE}::stake_vault::StakeReceipt`),
+        fetchOwnedObjects(account.address, `${LEGACY2_PACKAGE}::stake_vault::StakeReceipt`),
+        fetchOwnedObjects(account.address, `${LEGACY3_PACKAGE}::stake_vault::StakeReceipt`),
+        fetchOwnedObjects(account.address, `${LEGACY4_PACKAGE}::stake_vault::StakeReceipt`),
       ]);
-      const map = (objs, pkg, vault) => objs.data.map(o => o.data?.content?.fields && { ...o.data.content.fields, objectId: o.data.objectId, legacyPkg: pkg, legacyVault: vault }).filter(Boolean);
+      const map = (objs, pkg, vault) => objs.map(f => f ? { ...f, legacyPkg: pkg, legacyVault: vault } : null).filter(Boolean);
       setLegacyReceipts([...map(o1, LEGACY_PACKAGE, LEGACY_VAULT), ...map(o2, LEGACY2_PACKAGE, LEGACY2_VAULT), ...map(o3, LEGACY3_PACKAGE, LEGACY3_VAULT), ...map(o4, LEGACY4_PACKAGE, LEGACY4_VAULT)]);
-    } catch (e) { console.error(e); }
-  }, [account, client]);
+    } catch (e) { console.error("legacy:", e); }
+  }, [account]);
 
   useEffect(() => { fetchLegacyReceipts(); }, [fetchLegacyReceipts]);
 
   const fetchMyWinnings = useCallback(async () => {
     if (!account?.address) return;
     try {
-      const res = await Promise.all([PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveModule: { package: pkg, module: 'reward_pool' } }, limit: 50, order: 'descending' })));
-      const events = { data: res.flatMap(r => r.data) };
-      setMyWinnings(events.data.filter(e => e.type?.includes('PrizeAwarded') && e.parsedJson?.winner === account.address)
+      const [ev1, ev2] = await Promise.all([
+        queryEvents(`${PACKAGE}::reward_pool::PrizeAwarded`, 50),
+        queryEvents(`${PKG_CALL}::reward_pool::PrizeAwarded`, 50),
+      ]);
+      const all = [...ev1, ...ev2];
+      setMyWinnings(all
+        .filter(e => e.parsedJson?.winner === account.address)
         .map(e => ({ amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs })));
-    } catch (e) { console.error(e); }
-  }, [account, client]);
+    } catch (e) { console.error("myWinnings:", e); }
+  }, [account]);
 
   useEffect(() => { fetchMyWinnings(); }, [fetchMyWinnings]);
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      // V5 events are gross (no per-amount unstake events) — only counted while the
-      // V5 vault still holds principal; after wind-down V6 net is the whole truth.
-      const v5Vault = await client.getObject({ id: VAULT, options: { showContent: true } });
-      const v5Active = BigInt(v5Vault.data?.content?.fields?.total_principal ?? 0) > 0n;
-      // Paginated: without a cursor loop the staker set (and the pioneer
-      // counter derived from it) silently caps at 50 stake events.
-      const queryAll = async (type) => {
-        const all = []; let cursor = null;
-        for (let i = 0; i < 20; i++) {
-          const res = await client.queryEvents({ query: { MoveEventType: type }, limit: 50, cursor });
-          all.push(...res.data);
-          if (!res.hasNextPage) break;
-          cursor = res.nextCursor;
-        }
-        return { data: all };
-      };
-      const queries = [
-        queryAll(`${V6_PACKAGE}::stake_vault_v6::StakedV6`),
-        queryAll(`${V6_PACKAGE}::stake_vault_v6::UnstakedV6`),
-      ];
-      if (v5Active) queries.push(...[PACKAGE, PKG_CALL].map(pkg => client.queryEvents({ query: { MoveEventType: `${pkg}::stake_vault::Staked` }, limit: 50 })));
-      const [stakedV6, unstakedV6, ...v5res] = await Promise.all(queries);
+      const [stakedV6, unstakedV6] = await Promise.all([
+        queryEvents(`${V6_PACKAGE}::stake_vault_v6::StakedV6`, 200),
+        queryEvents(`${V6_PACKAGE}::stake_vault_v6::UnstakedV6`, 200),
+      ]);
       const stakes = {};
-      for (const ev of stakedV6.data) {
+      for (const ev of stakedV6) {
         const f = ev.parsedJson;
         if (f?.owner && f?.principal_mist) stakes[f.owner] = (stakes[f.owner] ?? 0n) + BigInt(f.principal_mist);
       }
-      for (const ev of unstakedV6.data) {
+      for (const ev of unstakedV6) {
         const f = ev.parsedJson;
         if (f?.owner && f?.principal_mist) stakes[f.owner] = (stakes[f.owner] ?? 0n) - BigInt(f.principal_mist);
       }
-      for (const r of v5res) for (const ev of r.data) {
-        const f = ev.parsedJson;
-        if (f?.staker && f?.amount_mist) stakes[f.staker] = (stakes[f.staker] ?? 0n) + BigInt(f.amount_mist);
-      }
       for (const a of Object.keys(stakes)) { if (stakes[a] <= 0n) delete stakes[a]; }
-      // Full staker count for the pioneer banner — the leaderboard below is a
-      // top-10 DISPLAY slice; deriving the pioneer count from it would freeze
-      // the banner at "10/1000 joined" forever once an 11th staker exists.
       setStakerCount(Object.keys(stakes).length);
       setLeaderboard(Object.entries(stakes).sort((a, b) => b[1] > a[1] ? 1 : -1).slice(0, 10).map(([addr, mist], i) => ({ rank: i + 1, addr, sui: Number(mist) / 1e9 })));
-    } catch (e) { console.error(e); }
-  }, [client]);
+    } catch (e) { console.error("leaderboard:", e); }
+  }, []);
 
   useEffect(() => { fetchLeaderboard(); }, [fetchLeaderboard]);
 
@@ -355,7 +413,7 @@ export default function App() {
         });
         const rows = await r.json();
         if (Array.isArray(rows) && rows[0]) setPointsData(rows[0]);
-      } catch { /* points unavailable — banner hides */ }
+      } catch { }
     })();
   }, [account?.address]);
 
@@ -364,6 +422,7 @@ export default function App() {
       .then(r => r.json()).then(d => setSuiPrice(d?.sui?.usd ?? null)).catch(() => {});
   }, []);
 
+  // ── Wallet interactions (unchanged — use dapp-kit for signing) ────────────
   async function handleStake() {
     if (!account) return;
     const amt = Math.floor(parseFloat(stakeAmount) * 1e9);
@@ -377,19 +436,15 @@ export default function App() {
         target: `${V6_PACKAGE}::stake_vault_v6::stake`,
         arguments: [
           tx.object(V6_VAULT),
-          tx.sharedObjectRef({ objectId: "0x0000000000000000000000000000000000000000000000000000000000000005", initialSharedVersion: 1, mutable: true }), // SuiSystemState
+          tx.sharedObjectRef({ objectId: "0x0000000000000000000000000000000000000000000000000000000000000005", initialSharedVersion: 1, mutable: true }),
           tx.object(HAEDAL_STAKING),
           coin,
-          tx.object("0x6"), // Clock
+          tx.object("0x6"),
         ],
       });
       signAndExecute({ transaction: tx }, {
         onSuccess: (r) => {
           setTxStatus({ type: "success", msg: `Staked! Tx: ${r.digest.slice(0,16)}...` });
-          // Fire-and-forget: record the referral if this visitor arrived via
-          // a ?ref= link and hasn't already been recorded (server enforces
-          // the "once per wallet" and "can't refer yourself" rules — this
-          // call is allowed to fail silently, e.g. if already referred).
           const refAddr = typeof window !== "undefined" ? localStorage.getItem("surge_ref") : null;
           if (refAddr && account?.address && refAddr !== account.address) {
             fetch(`${SUPABASE_URL}/rest/v1/referrals`, {
@@ -455,13 +510,12 @@ export default function App() {
     if (!account) return;
     setTxStatus({ type: "pending", msg: "Preparing withdrawal..." });
     try {
-      // withdraw_staked needs a LoyaltyRecord; create one inline if the user has none
-      const loyaltyObjs = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${PACKAGE}::loyalty_tracker::LoyaltyRecord` }, options: { showContent: true } });
-      const hasRecord = loyaltyObjs.data.length > 0;
+      const loyaltyObjs = await fetchOwnedObjects(account.address, `${PACKAGE}::loyalty_tracker::LoyaltyRecord`);
+      const hasRecord = loyaltyObjs.length > 0;
       const tx = new Transaction();
       tx.setGasPrice(1000);
       const loyaltyArg = hasRecord
-        ? tx.object(loyaltyObjs.data[0].data.objectId)
+        ? tx.object(loyaltyObjs[0].objectId)
         : tx.moveCall({ target: `${PKG_CALL}::loyalty_tracker::new_record`, arguments: [tx.object("0x6")] });
       tx.moveCall({
         target: `${PKG_CALL}::stake_vault::withdraw_staked`,
@@ -499,11 +553,9 @@ export default function App() {
         onSuccess: async () => {
           setLegacyStatus({ type: "pending", msg: "Step 2/2: Withdrawing SUI..." });
           await new Promise(res => setTimeout(res, 3000));
-          const objs = await client.getOwnedObjects({ owner: account.address, filter: { StructType: `${pkg}::loyalty_tracker::LoyaltyRecord` }, options: { showContent: true } });
-          if (!objs.data.length) { setLegacyStatus({ type: "error", msg: "LoyaltyRecord not found" }); return; }
-          const loyaltyId = objs.data[0].data.objectId;
-          // Old contracts (0xc44d, 0x51ce) need @0x5 SuiSystemState param
-          // New contracts (0x2755+) use simpler withdraw without @0x5
+          const objs = await fetchOwnedObjects(account.address, `${pkg}::loyalty_tracker::LoyaltyRecord`);
+          if (!objs.length) { setLegacyStatus({ type: "error", msg: "LoyaltyRecord not found" }); return; }
+          const loyaltyId = objs[0].objectId;
           const needsSuiSystem = pkg === LEGACY_PACKAGE || pkg === LEGACY2_PACKAGE;
           const tx2 = new Transaction();
           tx2.setGasPrice(1000);
@@ -538,7 +590,7 @@ export default function App() {
   const pulseTickets = sui >= 10 ? Math.floor(Math.sqrt(sui)) : 0;
   const surgeTickets = sui >= 50 ? Math.floor(Math.sqrt(sui)) : 0;
   const totalStaked = BigInt(vaultData?.total_principal ?? 0) + BigInt(v6VaultData?.total_principal ?? 0);
-  const pioneerTaken = stakerCount;                   // ALL unique on-chain stakers (not the top-10 slice)
+  const pioneerTaken = stakerCount;
   const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
   const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
@@ -546,8 +598,7 @@ export default function App() {
   const myV5Mist = userReceipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)), 0);
   const myStakeSui = (myV6Mist + myV5Mist) / 1e9;
   const myTotalWon = myWinnings.reduce((acc, w) => acc + w.amount, 0);
-  // Tier-basierter Fortschrittsbalken: zeigt wie weit zum nächsten Tier,
-  // nicht wie weit über 365 Tage — viel aussagekräftiger.
+
   const LOYALTY_TIERS = [
     { days: 0,   mult: 1.0 },
     { days: 30,  mult: 1.2 },
@@ -560,7 +611,7 @@ export default function App() {
     const d = loyaltyData.daysStaked;
     const currentIdx = [...LOYALTY_TIERS].reverse().findIndex(t => d >= t.days);
     const idx = LOYALTY_TIERS.length - 1 - currentIdx;
-    if (idx >= LOYALTY_TIERS.length - 1) return 100; // max tier
+    if (idx >= LOYALTY_TIERS.length - 1) return 100;
     const from = LOYALTY_TIERS[idx].days;
     const to   = LOYALTY_TIERS[idx + 1].days;
     return Math.min(((d - from) / (to - from)) * 100, 100);
@@ -660,14 +711,12 @@ export default function App() {
           })}
         </section>
 
-        {/* Tabs */}
         <div style={{ display: "flex", gap: 4, background: "var(--bg3)", borderRadius: 10, padding: 4 }}>
           {tabs.map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: 1, padding: "7px 4px", background: activeTab === tab.id ? "var(--bg2)" : "transparent", border: activeTab === tab.id ? "0.5px solid var(--border2)" : "none", borderRadius: 7, fontSize: 11, fontFamily: "'DM Mono',monospace", color: activeTab === tab.id ? "var(--text)" : "var(--text2)", cursor: "pointer", transition: "all 0.15s" }}>{tab.label}</button>
           ))}
         </div>
 
-        {/* Tab: Stake */}
         {activeTab === "stake" && <>
           {pointsData && (
             <section className="panel" style={{ marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "baseline", justifyContent: "space-between", borderColor: "rgba(245,200,66,0.35)" }}>
@@ -685,30 +734,16 @@ export default function App() {
               </div>
               {account?.address && (
                 <div style={{ width: "100%", marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(245,200,66,0.15)" }}>
-                  <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.35rem" }}>
-                    YOUR REFERRAL LINK
-                  </div>
+                  <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.35rem" }}>YOUR REFERRAL LINK</div>
                   <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.5rem", lineHeight: 1.5 }}>
-                    Share it — when someone stakes through your link, you earn up to +50% extra points for as long as they stay staked. No effect on their draw odds or principal.
+                    Share it — when someone stakes through your link, you earn up to +50% extra points for as long as they stay staked.
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                     <code style={{ fontSize: "0.78rem", color: "#F5C842", background: "rgba(245,200,66,0.08)", padding: "0.3rem 0.6rem", borderRadius: 6, wordBreak: "break-all" }}>
                       surgeonsui.com/?ref={account.address}
                     </code>
-                    <button
-                      onClick={() => navigator.clipboard.writeText(`https://surgeonsui.com/?ref=${account.address}`)}
-                      style={{ fontSize: "0.72rem", padding: "0.3rem 0.7rem", borderRadius: 6, border: "1px solid rgba(245,200,66,0.3)", background: "transparent", color: "#F5C842", cursor: "pointer" }}
-                    >
-                      Copy
-                    </button>
-                    <a
-                      href={`https://x.com/intent/tweet?text=${encodeURIComponent("Staking SUI with zero risk to principal. Only the yield wins prizes — join via my link: https://surgeonsui.com/?ref=" + account.address)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ fontSize: "0.72rem", padding: "0.3rem 0.7rem", borderRadius: 6, border: "1px solid rgba(29,155,240,0.4)", background: "transparent", color: "rgba(29,155,240,0.9)", cursor: "pointer", textDecoration: "none" }}
-                    >
-                      Share on X
-                    </a>
+                    <button onClick={() => navigator.clipboard.writeText(`https://surgeonsui.com/?ref=${account.address}`)} style={{ fontSize: "0.72rem", padding: "0.3rem 0.7rem", borderRadius: 6, border: "1px solid rgba(245,200,66,0.3)", background: "transparent", color: "#F5C842", cursor: "pointer" }}>Copy</button>
+                    <a href={`https://x.com/intent/tweet?text=${encodeURIComponent("Staking SUI with zero risk to principal. Only the yield wins prizes — join via my link: https://surgeonsui.com/?ref=" + account.address)}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.72rem", padding: "0.3rem 0.7rem", borderRadius: 6, border: "1px solid rgba(29,155,240,0.4)", background: "transparent", color: "rgba(29,155,240,0.9)", cursor: "pointer", textDecoration: "none" }}>Share on X</a>
                   </div>
                   {pointsData?.referral_count > 0 && (
                     <div style={{ fontSize: "0.72rem", color: "rgba(58,191,170,0.7)", marginTop: "0.4rem" }}>
@@ -716,7 +751,7 @@ export default function App() {
                     </div>
                   )}
                   <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.35)", marginTop: "0.6rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(245,200,66,0.1)", lineHeight: 1.5 }}>
-                    Points = stake × multiplier × time, shown on the leaderboard. Early Bird / Pioneer status locks your multiplier in <b style={{ color: "rgba(245,200,66,0.6)" }}>forever</b> — that part's already yours, permanently.
+                    Points = stake × multiplier × time. Early Bird / Pioneer status locks your multiplier in <b style={{ color: "rgba(245,200,66,0.6)" }}>forever</b>.
                   </div>
                 </div>
               )}
@@ -778,7 +813,7 @@ export default function App() {
                     <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
                     <div className="pos-status">✅ Active — earning since {r.deposit_ts_ms ? new Date(Number(r.deposit_ts_ms)).toLocaleDateString() : "now"}</div>
                   </div>
-                  <button className="unstake-btn" onClick={() => handleUnstakeV6(r.id?.id)}>Unstake</button>
+                  <button className="unstake-btn" onClick={() => handleUnstakeV6(r.id?.id || r.objectId)}>Unstake</button>
                 </div>
               ))}
               {haTickets.map((t, i) => (
@@ -801,17 +836,17 @@ export default function App() {
                 const unlockMs = r.unlock_ts_ms ? Number(r.unlock_ts_ms) : null;
                 const ready = unlockMs !== null && Date.now() >= unlockMs;
                 return (
-                <div className="position-row" key={i}>
-                  <div>
-                    <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
-                    <div className="pos-status">{unlockMs === null ? "✅ Active — earning tickets" : ready ? "✓ Ready to withdraw" : "⏳ Unstaking — ready in ~24h"}</div>
+                  <div className="position-row" key={i}>
+                    <div>
+                      <div className="pos-amount">{fmt(r.principal_mist, 4)} SUI</div>
+                      <div className="pos-status">{unlockMs === null ? "✅ Active — earning tickets" : ready ? "✓ Ready to withdraw" : "⏳ Unstaking — ready in ~24h"}</div>
+                    </div>
+                    {unlockMs === null
+                      ? <button className="unstake-btn" onClick={() => handleUnstake(r.id?.id || r.objectId)}>Unstake</button>
+                      : ready
+                        ? <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }} onClick={() => handleWithdraw(r.id?.id || r.objectId)}>Withdraw</button>
+                        : null}
                   </div>
-                  {unlockMs === null
-                    ? <button className="unstake-btn" onClick={() => handleUnstake(r.id?.id)}>Unstake</button>
-                    : ready
-                      ? <button className="unstake-btn" style={{ background: "rgba(58,191,170,0.15)", color: "#3ABFAA", borderColor: "rgba(58,191,170,0.3)" }} onClick={() => handleWithdraw(r.id?.id)}>Withdraw</button>
-                      : null}
-                </div>
                 );
               })}
             </section>
@@ -838,7 +873,6 @@ export default function App() {
           )}
         </>}
 
-        {/* Tab: Winners */}
         {activeTab === "winners" && (
           <section className="panel">
             <div className="panel-title">🏆 Recent Winners</div>
@@ -860,7 +894,6 @@ export default function App() {
           </section>
         )}
 
-        {/* Tab: Leaderboard */}
         {activeTab === "leaderboard" && (
           <section className="panel">
             <div className="panel-title">🥇 Top Stakers</div>
@@ -886,7 +919,6 @@ export default function App() {
           </section>
         )}
 
-        {/* Tab: My Winnings */}
         {activeTab === "mywinnings" && (
           <section className="panel">
             <div className="panel-title">💰 My Winnings</div>
@@ -915,8 +947,6 @@ export default function App() {
           </section>
         )}
 
-
-        {/* Transparency strip */}
         {v6VaultData && haRate && (() => {
           const principal = BigInt(v6VaultData.total_principal ?? 0);
           const ha = BigInt(v6VaultData.ha_balance ?? 0);
@@ -929,12 +959,11 @@ export default function App() {
           );
         })()}
 
-        {/* FAQ */}
         <section className="panel" style={{ marginBottom: "2rem" }}>
           <div className="panel-title">FAQ</div>
           {[
             { q: "Is my principal safe?", a: "Yes. Your deposited SUI is held in the vault. Only the staking yield goes into prize pools — your principal is never at risk." },
-            { q: "How does the prize pool get funded?", a: "Your stake is held as haSUI (Haedal liquid staking) and earns continuously. The yield is harvested and split: 20% Spark, 30% Pulse, ~48% Surge, 2% protocol fee. Harvest can mathematically never touch principal — coverage is enforced on-chain." },
+            { q: "How does the prize pool get funded?", a: "Your stake is held as haSUI (Haedal liquid staking) and earns continuously. The yield is harvested and split: 20% Spark, 30% Pulse, ~48% Surge, 2% protocol fee." },
             { q: "How are winners selected?", a: "Winners are chosen using sui::random — Sui's native on-chain verifiable randomness. No one can predict or manipulate the outcome." },
             { q: "How often are draws held?", a: "Spark every 6h (3 winners), Pulse weekly (4 winners), Surge monthly (1 jackpot). Fully automated." },
             { q: "What is the unstake delay?", a: "1-2 epochs (~1-2 days) via Haedal's native redemption. You receive a redemption ticket on unstake; once matured, claim your full principal — exact rate, no fee." },
