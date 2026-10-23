@@ -1,11 +1,153 @@
 require('dotenv/config');
 
-const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
+const { SuiGraphQLClient } = require('@mysten/sui/graphql');
+const { bcs } = require('@mysten/sui/bcs');
 const { Transaction } = require('@mysten/sui/transactions');
 const { Ed25519Keypair } = require('@mysten/sui/keypairs/ed25519');
-const { fromB64 } = require('@mysten/sui/utils');
+const { fromB64, fromBase64, toBase64, normalizeSuiAddress } = require('@mysten/sui/utils');
 const fs = require('fs');
 const os = require('os');
+
+// ── GraphQL adapter ────────────────────────────────────────────────────────────
+// Sui Mainnet JSON-RPC was switched off (node v1.82, Oct 2026). This adapter
+// re-implements exactly the JSON-RPC client methods this crank uses, on top of
+// the Sui GraphQL RPC, returning the SAME response shapes — so the draw /
+// harvest logic below stays untouched.
+
+const GQL_URL = process.env.GQL_URL ?? 'https://graphql.mainnet.sui.io/graphql';
+
+function createGqlClient(url = GQL_URL) {
+  const sdk = new SuiGraphQLClient({ url, network: 'mainnet' }); // tx build + execute
+
+  async function gql(query, variables = {}) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables }),
+    });
+    const text = await r.text();
+    let json;
+    try { json = JSON.parse(text); } catch { throw new Error(`GraphQL HTTP ${r.status}: ${text.slice(0, 200)}`); }
+    if (json.errors?.length) throw new Error('GraphQL: ' + json.errors.map(e => e.message).join('; '));
+    return json.data;
+  }
+
+  function fmtLocation(loc) {
+    const m = loc?.module;
+    return m ? `${m.address}::${m.name}::${loc.function_name ?? loc.function ?? '?'}` : JSON.stringify(loc);
+  }
+
+  // Reproduce JSON-RPC style error strings, e.g. "MoveAbort(0x..::staking::claim, 6)"
+  // — claimMaturedTickets() matches the abort code at the end of this string.
+  function failureString(effectsBcs) {
+    try {
+      const raw = bcs.TransactionEffects.parse(effectsBcs);
+      const st = (raw.V2 ?? raw.V1)?.status;
+      const err = st?.Failed?.error;
+      if (!err) return 'unknown failure';
+      if (err.$kind === 'MoveAbort') return `MoveAbort(${fmtLocation(err.MoveAbort[0])}, ${err.MoveAbort[1]})`;
+      return `${err.$kind}(${JSON.stringify(err[err.$kind], (_, v) => typeof v === 'bigint' ? v.toString() : v)})`;
+    } catch (e) {
+      return `unparsed failure (${e.message})`;
+    }
+  }
+
+  async function fetchEvents(digest) {
+    // Best-effort, only used for log output. Retry while the indexer catches up.
+    for (let i = 0; i < 5; i++) {
+      try {
+        const d = await gql(`query($d:String!){ transaction(digest:$d){ effects{ events(first:50){ nodes{ contents{ type{repr} json } } } } } }`, { d: digest });
+        const nodes = d?.transaction?.effects?.events?.nodes;
+        if (nodes) return nodes.map(n => ({ type: n.contents?.type?.repr, parsedJson: n.contents?.json }));
+      } catch (e) {
+        if (i === 4) console.error('  ⚠️ event lookup failed:', e.message);
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    return [];
+  }
+
+  return {
+    sdk,
+    gql,
+
+    async getObject({ id }) {
+      const d = await gql(`query($id:SuiAddress!){ object(address:$id){ asMoveObject{ contents{ type{repr} json } } } }`, { id });
+      const c = d?.object?.asMoveObject?.contents;
+      if (!c) return { data: null };
+      return { data: { objectId: id, content: { dataType: 'moveObject', type: c.type?.repr, fields: c.json } } };
+    },
+
+    async getLatestSuiSystemState() {
+      const d = await gql(`{ epoch { epochId } }`);
+      return { epoch: String(d?.epoch?.epochId ?? 0) };
+    },
+
+    async queryEvents({ query, limit = 50, cursor = null }) {
+      const d = await gql(
+        `query($t:String!,$n:Int!,$a:String){ events(first:$n, after:$a, filter:{type:$t}){ pageInfo{ hasNextPage endCursor } nodes{ contents{ type{repr} json } timestamp } } }`,
+        { t: query.MoveEventType, n: Math.min(limit, 50), a: cursor },
+      );
+      const ev = d?.events;
+      return {
+        data: (ev?.nodes ?? []).map(n => ({
+          type: n.contents?.type?.repr,
+          parsedJson: n.contents?.json,
+          timestampMs: n.timestamp ? String(new Date(n.timestamp).getTime()) : null,
+        })),
+        hasNextPage: !!ev?.pageInfo?.hasNextPage,
+        nextCursor: ev?.pageInfo?.endCursor ?? null,
+      };
+    },
+
+    async getOwnedObjects({ owner, filter }) {
+      const d = await gql(
+        `query($o:SuiAddress!,$t:String!){ address(address:$o){ objects(first:50, filter:{type:$t}){ nodes{ address } } } }`,
+        { o: owner, t: filter.StructType },
+      );
+      return { data: (d?.address?.objects?.nodes ?? []).map(n => ({ data: { objectId: n.address } })) };
+    },
+
+    // Read-only call; returns JSON-RPC-shaped results[i].returnValues[j] = [bytes[], type]
+    async devInspectTransactionBlock({ sender, transactionBlock }) {
+      transactionBlock.setSenderIfNotSet(sender);
+      const bytes = await transactionBlock.build({ client: sdk });
+      const d = await gql(
+        `query($tx:JSON!){ simulateTransaction(transaction:$tx){ error outputs{ returnValues{ value{ bcs } type{ repr } } } } }`,
+        { tx: { bcs: { value: toBase64(bytes) } } },
+      );
+      const sim = d?.simulateTransaction;
+      if (sim?.error) throw new Error('simulate: ' + sim.error);
+      return {
+        results: (sim?.outputs ?? []).map(o => ({
+          returnValues: (o?.returnValues ?? []).map(rv => [Array.from(fromBase64(rv.value.bcs)), rv.type?.repr]),
+        })),
+      };
+    },
+
+    async signAndExecuteTransaction({ signer, transaction }) {
+      transaction.setSenderIfNotSet(signer.toSuiAddress());
+      const bytes = await transaction.build({ client: sdk });
+      const { signature } = await signer.signTransaction(bytes);
+      const { transaction: t } = await sdk.core.executeTransaction({ transaction: bytes, signatures: [signature] });
+      const ok = !!t.effects?.status?.success;
+      const events = await fetchEvents(t.digest);
+      return {
+        digest: t.digest,
+        effects: {
+          status: ok ? { status: 'success' } : { status: 'failure', error: failureString(t.effects.bcs) },
+          gasUsed: t.effects?.gasUsed,
+        },
+        events,
+        balanceChanges: (t.balanceChanges ?? []).map(bc => ({
+          coinType: /^0x0*2::sui::SUI$/.test(bc.coinType ?? '') ? '0x2::sui::SUI' : bc.coinType,
+          owner: { AddressOwner: bc.address ? normalizeSuiAddress(bc.address) : null },
+          amount: bc.amount,
+        })),
+      };
+    },
+  };
+}
 
 // ── Env ────────────────────────────────────────────────────────────────────────
 
@@ -106,7 +248,8 @@ function formatCountdown(seconds) {
 }
 
 function balVal(field) {
-  return BigInt(field?.fields?.value ?? field ?? 0);
+  // JSON-RPC: "123" or { fields: { value } } · GraphQL json: "123" or { value }
+  return BigInt(field?.fields?.value ?? field?.value ?? field ?? 0);
 }
 
 function gasCost(effects) {
@@ -181,13 +324,14 @@ async function fetchPoolBalances(client) {
 /// skipped entirely in tick().
 async function fetchV5Stakers(client) {
   try {
-    const PACKAGE_V5 = '0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb';
-    const [e1, e2] = await Promise.all([
-      client.queryEvents({ query: { MoveEventType: `${PACKAGE_V5}::stake_vault::Staked` }, limit: 100 }),
-      client.queryEvents({ query: { MoveEventType: `${PACKAGE_ID}::stake_vault::Staked` }, limit: 100 }),
-    ]);
+    // GraphQL filters event types by the ORIGINAL package id (type origin),
+    // not by upgraded package ids — query all candidates, dedupe by package.
+    const PACKAGE_V5      = '0x35732358f2e0a683fe2014f5781b8ab67146d40ce63a76ac0a30ac52fdb7b2bb';
+    const PACKAGE_TYPE_ID = process.env.PACKAGE_TYPE_ID ?? '0x330aa337772418f68117556dce74034063f11a8de68f60a99acc9a5ee62f5fb3';
+    const pkgs = [...new Set([PACKAGE_TYPE_ID, PACKAGE_V5, PACKAGE_ID])];
+    const results = await Promise.all(pkgs.map(p => queryAllEvents(client, `${p}::stake_vault::Staked`)));
     const stakers = {};
-    for (const ev of [...e1.data, ...e2.data]) {
+    for (const ev of results.flat()) {
       const f = ev.parsedJson;
       if (f?.staker && f?.amount_mist) {
         stakers[f.staker] = (stakers[f.staker] ?? 0n) + BigInt(f.amount_mist);
@@ -673,8 +817,9 @@ async function main() {
     process.exit(1);
   }
 
-  const client  = new SuiClient({ url: NETWORK === 'mainnet' ? process.env.RPC_URL : getFullnodeUrl(NETWORK) });
+  const client  = createGqlClient(GQL_URL);
   wrapClientWithTimeout(client, RPC_TIMEOUT_MS);
+  console.log(`   GraphQL:    ${GQL_URL}`);
   console.log(`   RPC timeout: ${RPC_TIMEOUT_MS / 1000}s per call`);
   const keypair = loadKeypair();
   console.log(`   Address:    ${keypair.getPublicKey().toSuiAddress()}\n`);
@@ -683,4 +828,11 @@ async function main() {
   setInterval(() => tick(client, keypair).catch(console.error), POLL_MS);
 }
 
-main().catch(e => { console.error('Fatal:', e); process.exit(1); });
+if (require.main === module) {
+  main().catch(e => { console.error('Fatal:', e); process.exit(1); });
+}
+
+module.exports = {
+  createGqlClient, fetchV6Vault, fetchHaRate, fetchDrawState, fetchPoolBalances,
+  fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers,
+};
