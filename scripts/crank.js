@@ -558,36 +558,74 @@ async function harvestStaking(client, keypair, pendingRewards) {
   }
 }
 
-// ── Draw Registration + Trigger (unchanged) ───────────────────────────────────
+// ── Ticket model ──────────────────────────────────────────────────────────────
+//
+// Linear odds, identical for all three draws: 1 ticket per TICKET UNIT of stake.
+//   unit    = max(1 SUI, ceil(totalEligibleStake / MAX_TICKETS_PER_DRAW))
+//   tickets = floor(stake / unit)
+// - Linear = sybil-neutral: splitting one wallet into many never adds tickets
+//   (the old √-model gave 10 wallets × 10 SUI 3× the tickets of 1 × 100 SUI).
+// - No "min 1 ticket": that would re-open the split exploit once unit > 1 SUI.
+// - The cap keeps DrawState's vector<address> (32 B per ticket) far below the
+//   on-chain object size limit and the per-tx gas budget as TVL grows.
+// - Single entry gate: ≥ 1 SUI (= protocol minimum deposit), every draw.
+const MIN_TICKET_STAKE_MIST = 1_000_000_000n;   // 1 SUI
+const MAX_TICKETS_PER_DRAW  = BigInt(process.env.MAX_TICKETS_PER_DRAW ?? 2000);
+const MAX_REGISTRATIONS_PER_TX = 900;           // PTB limit is 1024 commands
+
+// Wallets never entered into draws (team / treasury). Default: admin wallet.
+// Set DRAW_EXCLUDE="" to exclude nobody, or a comma list to override.
+const ADMIN_WALLET = '0x0baa87509dbe704c0932b664bed03b4ac4afe0015fe40a83a6a9d7d2a4fc183b';
+const DRAW_EXCLUDE = new Set(
+  (process.env.DRAW_EXCLUDE ?? ADMIN_WALLET).split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+);
+
+function planTickets(stakers) {
+  const eligible = Object.entries(stakers)
+    .filter(([addr, mist]) => !DRAW_EXCLUDE.has(addr.toLowerCase()) && BigInt(mist) >= MIN_TICKET_STAKE_MIST);
+  const total = eligible.reduce((a, [, m]) => a + BigInt(m), 0n);
+  const capUnit = (total + MAX_TICKETS_PER_DRAW - 1n) / MAX_TICKETS_PER_DRAW;
+  const unit = capUnit > MIN_TICKET_STAKE_MIST ? capUnit : MIN_TICKET_STAKE_MIST;
+  const entries = eligible
+    .map(([addr, m]) => [addr, BigInt(m) / unit])
+    .filter(([, t]) => t > 0n);
+  const totalTickets = entries.reduce((a, [, t]) => a + t, 0n);
+  const excluded = Object.keys(stakers).filter(a => DRAW_EXCLUDE.has(a.toLowerCase()));
+  return { unit, entries, totalTickets, excluded };
+}
+
+// ── Draw Registration + Trigger ───────────────────────────────────────────────
 
 async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   const names = ['Spark', 'Pulse', 'Surge'];
   const registerFn = ['register_spark_tickets', 'register_pulse_tickets', 'register_surge_tickets'];
   const triggerFn  = ['trigger_spark',          'trigger_pulse',          'trigger_surge'];
-  const gates = [1, 10, 50];
   const name = names[drawType];
 
   if (Object.keys(stakers).length === 0) {
     console.log(`  ⚠️ ${name}: no stakers found — skipping draw`);
     return;
   }
-  console.log(`  🎲 ${name} draw — registering tickets & triggering...`);
+
+  const plan = planTickets(stakers);
+  if (plan.excluded.length > 0) {
+    console.log(`  🚫 ${name}: ${plan.excluded.length} excluded wallet(s) (DRAW_EXCLUDE): ${plan.excluded.map(a => a.slice(0, 10) + '…').join(', ')}`);
+  }
+  if (plan.entries.length > MAX_REGISTRATIONS_PER_TX) {
+    console.error(`  ❌ ${name}: ${plan.entries.length} participants exceed ${MAX_REGISTRATIONS_PER_TX}/tx — batching not implemented yet, skipping draw`);
+    return;
+  }
+  console.log(`  🎲 ${name} draw — ${plan.entries.length} participants · ${plan.totalTickets} tickets · 1 ticket = ${fmt(plan.unit)} SUI`);
 
   try {
     const tx = new Transaction();
     tx.setGasPrice(1000);
 
     let registered = 0;
-    for (const [addr, amtMist] of Object.entries(stakers)) {
-      const suiAmt = Number(amtMist) / 1e9;
-      let tickets;
-      if (drawType === 0) {
-        tickets = suiAmt >= 1 ? 1 : 0;
-      } else if (drawType === 1) {
-        tickets = suiAmt < 10 ? 0 : Math.max(1, Math.floor(Math.sqrt(suiAmt)));
-      } else {
-        tickets = suiAmt < 50 ? 0 : Math.max(1, Math.floor(Math.sqrt(suiAmt)));
-      }
+    for (const [addr, ticketsBig] of plan.entries) {
+      const tickets = Number(ticketsBig);
+      const pct = Number((ticketsBig * 10000n) / plan.totalTickets) / 100;
+      console.log(`     ${addr.slice(0, 10)}… ${tickets} tickets (${pct}%)`);
       if (tickets > 0) {
         registered++;
         tx.moveCall({
@@ -603,7 +641,7 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
     }
 
     if (registered === 0) {
-      console.log(`  ⚠️ ${name}: no eligible participants (need ≥${gates[drawType]} SUI staked) — skipping draw, no gas spent`);
+      console.log(`  ⚠️ ${name}: no eligible participants (need ≥1 SUI staked, not excluded) — skipping draw, no gas spent`);
       return;
     }
 
@@ -812,5 +850,5 @@ if (require.main === module) {
 
 module.exports = {
   createGqlClient, fetchV6Vault, fetchHaRate, fetchDrawState, fetchPoolBalances,
-  fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers,
+  fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers, planTickets,
 };

@@ -580,10 +580,13 @@ export default function App() {
   }
 
   const sui = parseFloat(stakeAmount) || 0;
-  const sparkTickets = sui >= 1 ? 1 : 0;
-  const pulseTickets = sui >= 10 ? Math.floor(Math.sqrt(sui)) : 0;
-  const surgeTickets = sui >= 50 ? Math.floor(Math.sqrt(sui)) : 0;
   const totalStaked = BigInt(vaultData?.total_principal ?? 0) + BigInt(v6VaultData?.total_principal ?? 0);
+  // Mirrors crank planTickets(): linear odds, 1 ticket per unit, unit = max(1 SUI, ceil((TVL + deposit) / 2000))
+  const ticketUnitSui = Math.max(1, Math.ceil((Number(totalStaked) / 1e9 + sui) / 2000));
+  const drawTickets = sui >= 1 ? Math.floor(sui / ticketUnitSui) : 0;
+  const sparkTickets = drawTickets;
+  const pulseTickets = drawTickets;
+  const surgeTickets = drawTickets;
   const pioneerTaken = stakerCount;
   const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
   const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
@@ -759,7 +762,7 @@ export default function App() {
                 <span className="input-denom">SUI</span>
               </div>
               <div className="tickets">
-                {[{ name: "⚡ Spark", gate: 1, count: sparkTickets, color: "#F5C842" }, { name: "🔄 Pulse", gate: 10, count: pulseTickets, color: "#3ABFAA" }, { name: "🌊 Surge", gate: 50, count: surgeTickets, color: "#C67FE8" }].map(t => (
+                {[{ name: "⚡ Spark", gate: 1, count: sparkTickets, color: "#F5C842" }, { name: "🔄 Pulse", gate: 1, count: pulseTickets, color: "#3ABFAA" }, { name: "🌊 Surge", gate: 1, count: surgeTickets, color: "#C67FE8" }].map(t => (
                   <div className={`ticket ${t.count > 0 ? "active" : ""}`} key={t.name} style={{ "--tc": t.color }}>
                     <span className="ticket-name">{t.name}</span>
                     <span className="ticket-count">{t.count > 0 ? `${t.count} tickets` : `min ${t.gate} SUI`}</span>
@@ -790,7 +793,8 @@ export default function App() {
               <p className="loyalty-note">Streak bonus up to +0.3x · Resets on full withdrawal</p>
               <div className="info-rows">
                 <div className="info-row"><span>Min. deposit</span><span>1 SUI</span></div>
-                <div className="info-row"><span>Draw entry</span><span>1 / 10 / 50 SUI</span></div>
+                <div className="info-row"><span>Draw entry</span><span>1 SUI · all draws</span></div>
+                <div className="info-row"><span>Odds</span><span>Linear · 1 SUI = 1 ticket</span></div>
                 <div className="info-row"><span>Unstake delay</span><span>1–2 epochs (~1–2 days)</span></div>
                 <div className="info-row"><span>Protocol fee</span><span>2% of yield</span></div>
                 <div className="info-row"><span>Randomness</span><span>sui::random (on-chain)</span></div>
@@ -961,7 +965,7 @@ export default function App() {
             { q: "How are winners selected?", a: "Winners are chosen using sui::random — Sui's native on-chain verifiable randomness. No one can predict or manipulate the outcome." },
             { q: "How often are draws held?", a: "Spark every 6h (3 winners), Pulse weekly (4 winners), Surge monthly (1 jackpot). Fully automated." },
             { q: "What is the unstake delay?", a: "1-2 epochs (~1-2 days) via Haedal's native redemption. You receive a redemption ticket on unstake; once matured, claim your full principal — exact rate, no fee." },
-            { q: "What is the minimum deposit?", a: "1 SUI minimum to deposit, which also enters you into Spark draws. Pulse draws need 10 SUI, Surge draws 50 SUI." },
+            { q: "What is the minimum deposit?", a: "1 SUI minimum — that enters you into every draw (Spark, Pulse and Surge). Odds are linear: 1 SUI staked = 1 ticket, so splitting a stake across wallets never improves your chances." },
             { q: "Is the contract audited?", a: "Not yet — Surge is early and unaudited. Open source on GitHub, every number verifiable on-chain, principal coverage enforced by the contract. Formal audit planned before external TVL scales. Stake only what you'd put into an experiment." },
           ].map((item, i) => (
             <div key={i} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", overflow: "hidden" }}>

@@ -46,5 +46,14 @@ async function fields(type) {
   await step('fetchV6Stakers', () => c.fetchV6Stakers(client));
   await step('fetchV5Stakers', () => c.fetchV5Stakers(client));
   await step('Haedal tickets (crank)', () => client.getOwnedObjects({ owner: CRANK, filter: { StructType: HAEDAL_TICKET } }));
+
+  console.log('\n── Ticket plan for the next draw (same for Spark / Pulse / Surge)');
+  try {
+    const plan = c.planTickets(await c.fetchV6Stakers(client));
+    console.log(`   1 ticket = ${Number(plan.unit) / 1e9} SUI · ${plan.totalTickets} tickets · excluded: ${plan.excluded.map(a => a.slice(0, 10) + '…').join(', ') || 'none'}`);
+    for (const [addr, t] of plan.entries) {
+      console.log(`   ${addr.slice(0, 10)}…  ${t} tickets  → ${(Number(t) / Number(plan.totalTickets) * 100).toFixed(1)}% win chance`);
+    }
+  } catch (e) { console.log('❌ planTickets:', e.message); }
   process.exit(0);
 })();
