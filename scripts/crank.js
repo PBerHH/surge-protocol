@@ -573,6 +573,12 @@ const MIN_TICKET_STAKE_MIST = 1_000_000_000n;   // 1 SUI
 const MAX_TICKETS_PER_DRAW  = BigInt(process.env.MAX_TICKETS_PER_DRAW ?? 2000);
 const MAX_REGISTRATIONS_PER_TX = 900;           // PTB limit is 1024 commands
 
+// Hold specific draws (e.g. for an announced live event): PAUSE_DRAWS="surge"
+// or "spark,pulse,surge". Pools keep accumulating; remove the var to resume.
+const PAUSE_DRAWS = new Set(
+  (process.env.PAUSE_DRAWS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+);
+
 // Wallets never entered into draws (team / treasury). Default: admin wallet.
 // Set DRAW_EXCLUDE="" to exclude nobody, or a comma list to override.
 const ADMIN_WALLET = '0x0baa87509dbe704c0932b664bed03b4ac4afe0015fe40a83a6a9d7d2a4fc183b';
@@ -804,7 +810,9 @@ async function tick(client, keypair) {
   ];
   for (const c of checks) {
     if (now >= c.next) {
-      if (c.bal && c.bal >= MIN_POOL_MIST) {
+      if (PAUSE_DRAWS.has(c.name.toLowerCase())) {
+        console.log(`  ${c.icon} ${c.name}: due — PAUSED via PAUSE_DRAWS, pool ${fmt(c.bal ?? 0n)} SUI held for next run`);
+      } else if (c.bal && c.bal >= MIN_POOL_MIST) {
         await registerAndDraw(client, keypair, c.type, stakers, c.bal);
         await new Promise(r => setTimeout(r, 3000));
       } else {
