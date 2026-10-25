@@ -19,7 +19,8 @@ GitHub: github.com/PBerHH/surge-protocol
 4. VRF-based draws (Sui `sui::random`) select winners every 6h / weekly / monthly
 5. Principal always withdrawable in full
 
-Prize tiers: **Spark** (daily, small) / **Pulse** (weekly) / **Surge** (monthly, big)
+Prize draw: **one monthly "Surge Night"** with 8 ranked prizes — #1 jackpot = Surge bucket (50%), #2–5 = Pulse bucket / 4 (30%), #6–8 = Spark bucket / 3 (20%). The three buckets still exist on-chain (reward_pool split + draw_manager cadence); the crank draws them together. A true single pool needs a contract upgrade.
+Odds: linear, 1 SUI = 1 ticket (unit grows above 2,000 SUI TVL to cap tickets at 2,000 per draw). Entry ≥ 1 SUI. Team wallets excluded.
 
 ---
 
@@ -65,6 +66,10 @@ Prize tiers: **Spark** (daily, small) / **Pulse** (weekly) / **Surge** (monthly,
 
 **Backend (Fly.io):**
 - `GQL_URL` — optional, defaults to `https://graphql.mainnet.sui.io/graphql`
+- `DRAW_MODE` — `combined` (default: ONE monthly "Surge Night", Spark+Pulse+Surge drawn together = 8 prizes) or `separate` (old 6h/weekly/monthly)
+- `DRAW_NOT_BEFORE_MS` — earliest event time (default Sun 8 Nov 2026 20:00 CET); keep in sync with `FIRST_EVENT_MS` in App.jsx
+- `DRAW_EXCLUDE` — comma list of wallets never entered into draws (default: admin wallet; team wallets go here)
+- `PAUSE_DRAWS` — `surge`/`event` holds the event; `spark,pulse` in separate mode
 - `RPC_URL` — legacy, no longer used by crank / points worker
 - `NETWORK=mainnet`
 - `PACKAGE_ID` — V6 package address

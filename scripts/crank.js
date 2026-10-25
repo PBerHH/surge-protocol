@@ -573,6 +573,17 @@ const MIN_TICKET_STAKE_MIST = 1_000_000_000n;   // 1 SUI
 const MAX_TICKETS_PER_DRAW  = BigInt(process.env.MAX_TICKETS_PER_DRAW ?? 2000);
 const MAX_REGISTRATIONS_PER_TX = 900;           // PTB limit is 1024 commands
 
+// ── Draw schedule ─────────────────────────────────────────────────────────────
+// DRAW_MODE=combined (default): ONE monthly prize event. Spark + Pulse + Surge
+// are drawn together, with the same ticket list, as soon as Surge is due
+// on-chain (30-day cadence) AND DRAW_NOT_BEFORE_MS has passed → 8 ranked prizes
+// (1 jackpot = Surge pool, 4 = Pulse pool / 4, 3 = Spark pool / 3).
+// Surge is drawn FIRST; Pulse/Spark only follow if Surge succeeded — otherwise
+// Spark/Pulse (6h / weekly on-chain cadence) would fire every tick on their own.
+// DRAW_MODE=separate restores the old independent 6h / weekly / monthly draws.
+const DRAW_MODE = (process.env.DRAW_MODE ?? 'combined').toLowerCase();
+const DRAW_NOT_BEFORE_MS = BigInt(process.env.DRAW_NOT_BEFORE_MS ?? Date.UTC(2026, 10, 8, 19, 0, 0)); // Sun 8 Nov 2026, 20:00 CET
+
 // Hold specific draws (e.g. for an announced live event): PAUSE_DRAWS="surge"
 // or "spark,pulse,surge". Pools keep accumulating; remove the var to resume.
 const PAUSE_DRAWS = new Set(
@@ -610,7 +621,7 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
 
   if (Object.keys(stakers).length === 0) {
     console.log(`  ⚠️ ${name}: no stakers found — skipping draw`);
-    return;
+    return false;
   }
 
   const plan = planTickets(stakers);
@@ -619,10 +630,11 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   }
   if (plan.entries.length > MAX_REGISTRATIONS_PER_TX) {
     console.error(`  ❌ ${name}: ${plan.entries.length} participants exceed ${MAX_REGISTRATIONS_PER_TX}/tx — batching not implemented yet, skipping draw`);
-    return;
+    return false;
   }
   console.log(`  🎲 ${name} draw — ${plan.entries.length} participants · ${plan.totalTickets} tickets · 1 ticket = ${fmt(plan.unit)} SUI`);
 
+  let drawn = false;
   try {
     const tx = new Transaction();
     tx.setGasPrice(1000);
@@ -648,7 +660,7 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
 
     if (registered === 0) {
       console.log(`  ⚠️ ${name}: no eligible participants (need ≥1 SUI staked, not excluded) — skipping draw, no gas spent`);
-      return;
+      return false;
     }
 
     tx.moveCall({
@@ -669,6 +681,7 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
     });
     if (r.effects?.status?.status === 'success') {
       console.log(`  ✅ ${name} draw complete — tx: ${r.digest}`);
+      drawn = true;
       for (const ev of r.events ?? []) {
         if (ev.type?.includes('PrizeAwarded')) {
           const f = ev.parsedJson;
@@ -681,6 +694,7 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   } catch (e) {
     console.error(`  ❌ ${name} draw error:`, e.message);
   }
+  return drawn;
 }
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
@@ -808,6 +822,12 @@ async function tick(client, keypair) {
     { type: 1, name: 'Pulse', icon: '🔄', next: drawTimes.nextPulseMs, bal: balances?.pulse },
     { type: 2, name: 'Surge', icon: '🌊', next: drawTimes.nextSurgeMs, bal: balances?.surge },
   ];
+
+  if (DRAW_MODE !== 'separate') {
+    await runCombinedEvent(client, keypair, checks, stakers, now);
+    return;
+  }
+
   for (const c of checks) {
     if (now >= c.next) {
       if (PAUSE_DRAWS.has(c.name.toLowerCase())) {
@@ -823,6 +843,57 @@ async function tick(client, keypair) {
       console.log(`  ${c.icon} ${c.name}: next in ${formatCountdown(sec)}`);
     }
   }
+}
+
+// ── Combined monthly event ────────────────────────────────────────────────────
+
+let scheduledEventAt = 0n;
+
+async function runCombinedEvent(client, keypair, checks, stakers, now) {
+  const [spark, pulse, surge] = checks;
+  const eventAt = surge.next > DRAW_NOT_BEFORE_MS ? surge.next : DRAW_NOT_BEFORE_MS;
+  const total = (spark.bal ?? 0n) + (pulse.bal ?? 0n) + (surge.bal ?? 0n);
+
+  if (now < eventAt) {
+    console.log(`  🌊 Monthly event: ${fmt(total)} SUI · 8 prizes · in ${formatCountdown(Number(eventAt - now) / 1000)} (${new Date(Number(eventAt)).toISOString()})`);
+    // Hit the announced time exactly instead of up to 6h late.
+    const wait = eventAt - now;
+    if (wait <= BigInt(POLL_MS) && scheduledEventAt !== eventAt) {
+      scheduledEventAt = eventAt;
+      console.log(`  ⏱️  Event timer set for ${new Date(Number(eventAt)).toISOString()}`);
+      setTimeout(() => safeTick(client, keypair), Number(wait) + 5_000);
+    }
+    return;
+  }
+  if (PAUSE_DRAWS.has('surge') || PAUSE_DRAWS.has('event')) {
+    console.log(`  🌊 Monthly event due — PAUSED via PAUSE_DRAWS · pool ${fmt(total)} SUI held`);
+    return;
+  }
+  if (!surge.bal || surge.bal < MIN_POOL_MIST) {
+    console.log(`  🌊 Monthly event due but jackpot below ${fmt(MIN_POOL_MIST)} SUI — skipping`);
+    return;
+  }
+
+  console.log(`  🎉 Monthly event — drawing 8 prizes from ${fmt(total)} SUI`);
+  const ok = await registerAndDraw(client, keypair, surge.type, stakers, surge.bal);
+  if (!ok) {
+    console.log('  ⚠️ Jackpot draw did not complete — Pulse/Spark held for the next attempt');
+    return;
+  }
+  for (const c of [pulse, spark]) {
+    await new Promise(r => setTimeout(r, 3000));
+    if (now < c.next) { console.log(`  ${c.icon} ${c.name}: not due on-chain yet — skipped in this event`); continue; }
+    if (!c.bal || c.bal < MIN_POOL_MIST) { console.log(`  ${c.icon} ${c.name}: pool below ${fmt(MIN_POOL_MIST)} SUI — skipped in this event`); continue; }
+    await registerAndDraw(client, keypair, c.type, stakers, c.bal);
+  }
+}
+
+// One tick at a time — the event timer and the 6h interval can overlap.
+let ticking = false;
+async function safeTick(client, keypair) {
+  if (ticking) { console.log('  ⏭️ tick already running — skipped'); return; }
+  ticking = true;
+  try { await tick(client, keypair); } catch (e) { console.error(e); } finally { ticking = false; }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -848,8 +919,9 @@ async function main() {
   const keypair = loadKeypair();
   console.log(`   Address:    ${keypair.getPublicKey().toSuiAddress()}\n`);
 
-  await tick(client, keypair);
-  setInterval(() => tick(client, keypair).catch(console.error), POLL_MS);
+  console.log(`   Draw mode:  ${DRAW_MODE}${DRAW_MODE !== 'separate' ? ` · not before ${new Date(Number(DRAW_NOT_BEFORE_MS)).toISOString()}` : ''}`);
+  await safeTick(client, keypair);
+  setInterval(() => safeTick(client, keypair), POLL_MS);
 }
 
 if (require.main === module) {
@@ -858,5 +930,5 @@ if (require.main === module) {
 
 module.exports = {
   createGqlClient, fetchV6Vault, fetchHaRate, fetchDrawState, fetchPoolBalances,
-  fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers, planTickets,
+  fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers, planTickets, tick,
 };
