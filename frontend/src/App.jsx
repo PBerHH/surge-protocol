@@ -327,6 +327,7 @@ export default function App() {
   const [myWinnings, setMyWinnings] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [stakerCount, setStakerCount] = useState(0);
+  const [pioneerWallets, setPioneerWallets] = useState(0);
   const [openFaq, setOpenFaq] = useState(null);
   const [activeTab, setActiveTab] = useState("stake");
   const [loyaltyData, setLoyaltyData] = useState(null);
@@ -488,6 +489,20 @@ export default function App() {
   }, []);
 
   useEffect(() => { fetchLeaderboard(); }, [fetchLeaderboard]);
+
+  // Pioneer slots are handed out by the points worker in order of first stake (wallets table)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/wallets?select=address`, {
+          method: "HEAD",
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, Prefer: "count=exact" },
+        });
+        const total = Number((r.headers.get("content-range") ?? "").split("/")[1]);
+        if (Number.isFinite(total)) setPioneerWallets(total);
+      } catch (e) { console.error("pioneer count:", e); }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!account?.address || !SUPABASE_ANON_KEY) { setPointsData(null); return; }
@@ -686,7 +701,7 @@ export default function App() {
   const sparkTickets = drawTickets;
   const pulseTickets = drawTickets;
   const surgeTickets = drawTickets;
-  const pioneerTaken = stakerCount;
+  const pioneerTaken = Math.max(pioneerWallets, stakerCount);
   const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
   const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
