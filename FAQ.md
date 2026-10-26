@@ -9,7 +9,7 @@ Surge Protocol is a no-loss prize savings game on Sui. Staked SUI is converted i
 1. Stake SUI through Surge Protocol (minimum 1 SUI)
 2. Your SUI is atomically converted to haSUI (Haedal) inside the vault — earning real staking yield (~2-2.5% APY) continuously, no warmup
 3. The yield (haSUI appreciation) is harvested automatically — the contract enforces on-chain that harvest can never touch principal
-4. Yield funds three prize pools: Spark (every 6h), Pulse (weekly), Surge (monthly)
+4. Once a month, at **Surge Night**, the yield is drawn among 8 winners — live on X, with reminders and results posted automatically to Telegram
 5. Winners are drawn using `sui::random` — an on-chain random value that can't be predicted in advance
 
 ### Is my principal at risk?
@@ -22,22 +22,26 @@ haSUI is Haedal's liquid staking token — the largest and oldest LST on Sui (li
 
 ## Draws & Prizes
 
-### How do I enter draws?
+### How do I enter Surge Night?
+Stake at least 1 SUI. That enters you into all 8 prizes of every Surge Night: 1 jackpot (~50% of the pool), 4 prizes (~7.5% each) and 3 prizes (~6.7% each).
 
-| Draw | Minimum | Tickets | Frequency |
-|------|---------|---------|-----------|
-| ⚡ Spark | 1 SUI | **1 per wallet** (equal odds) | Every 6h |
-| 🔄 Pulse | 10 SUI | √stake × loyalty | Weekly |
-| 🌊 Surge | 50 SUI | √stake × loyalty | Monthly |
+### How many tickets do I get?
+1 SUI = 1 ticket, filled up over the 30 days before the draw. A deposit staked for the whole 30 days counts fully; one made 3 days before the draw counts 10%. **Stake early, hold more.**
 
-**Spark is equal odds** — every staker gets exactly 1 ticket regardless of stake size. A 1 SUI staker has the same daily chance as a 10,000 SUI whale.
+### Does splitting my SUI across wallets help?
+No. Odds are linear — 100 SUI in one wallet has exactly the same chance as 10 wallets with 10 SUI.
 
-### What does √stake mean for Pulse and Surge?
-Square-root scaling makes draws fairer. A 100 SUI staker gets ~10 tickets, a 10,000 SUI staker ~100 — not 100×. Proportional but anti-whale.
+### Do Points or multipliers increase my draw chances?
+No. Tickets depend only on how much you stake and for how long. Points and multipliers are a separate rewards track.
 
-### Do multipliers increase my draw chances?
-For Spark: no — it's equal odds, multipliers don't apply.
-For Pulse and Surge: yes — your Pioneer/Loyalty multiplier boosts your ticket count.
+### Where do I see the draw and the winners?
+Live in an X Space on [@Surge_Sui](https://x.com/Surge_Sui). Reminders before the draw and all winners with their on-chain transaction links are posted automatically to [t.me/surge_sui](https://t.me/surge_sui), so anyone can verify the result.
+
+### Can the team win?
+No. Team wallets are excluded from every draw.
+
+### Why did the draw system change?
+Until October 2026 Surge ran three separate draws (Spark every 6h, Pulse weekly, Surge monthly) with different minimums. At today's size that split the yield into pools too small to pay out. Now everything goes into one monthly event with bigger, ranked prizes — and the time-weighting rewards people who actually stake rather than last-minute deposits.
 
 ### How are winners selected?
 The random value comes from Sui's on-chain VRF (`sui::random`), so it can't be predicted in advance and is verifiable on-chain.
@@ -53,7 +57,7 @@ Surge takes 2% of staking yield, split fully on-chain:
 - **1% Operations** — crank automation, infrastructure, gas costs
 - **1% Marketing** — partnerships, ads, community growth, grants
 
-The remaining 98% goes to prize pools. The pools are split 20% Spark / 30% Pulse / ~48% Surge of gross yield (the 2% fee is taken from the Surge share).
+The remaining 98% goes to the Surge Night prize pool: 48% of gross yield funds the jackpot, 30% prizes #2–5 and 20% prizes #6–8.
 
 ### Why charge fees at all?
 Running Surge requires infrastructure: a crank server running 24/7, databases, hosting, and marketing to grow TVL. Bigger TVL = bigger prizes.
@@ -104,8 +108,10 @@ V6. The contract has been upgraded several times since launch, each time without
 ## Contact & Support
 
 - **Website:** [surgeonsui.com](https://surgeonsui.com)
-- **GitHub:** [github.com/surge-dev/surge-protocol](https://github.com/surge-dev/surge-protocol)
+- **X (Surge Night live):** [@Surge_Sui](https://x.com/Surge_Sui)
+- **Telegram (draw alerts):** [t.me/surge_sui](https://t.me/surge_sui)
+- **GitHub:** [github.com/PBerHH/surge-protocol](https://github.com/PBerHH/surge-protocol)
 
 ---
 
-*Last updated: June 2026*
+*Last updated: October 2026*

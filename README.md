@@ -17,28 +17,32 @@ Think of it like a savings account where instead of earning interest, you get lo
 ## How it works
 
 1. **Stake SUI** — deposit into the Surge vault (minimum 1 SUI), converted atomically into **haSUI** (Haedal liquid staking) — earning from the second it arrives
-2. **Earn tickets** — Spark gives 1 ticket per wallet (equal odds); Pulse and Surge scale with stake (√stake × loyalty)
+2. **Earn tickets** — 1 SUI = 1 ticket. Tickets fill up over the 30 days before a draw, so staking early counts fully
 3. **Yield funds prizes** — haSUI appreciation (~2–2.5% APY staking yield) is harvested and split into prize pools; harvest mathematically cannot touch principal (coverage enforced on-chain)
-4. **Draws happen automatically** — a team-operated crank triggers draws on-chain
+4. **Surge Night** — once a month, 8 winners are drawn on-chain, live in an X Space ([@Surge_Sui](https://x.com/Surge_Sui)); reminders and results with transaction links are posted automatically to Telegram ([t.me/surge_sui](https://t.me/surge_sui))
 5. **Winners are paid** — directly to their wallet, no claiming needed
 
-### Draw schedule
+### Surge Night — one monthly prize draw
 
-| Draw | Frequency | Winners | Pool share* |
-|------|-----------|---------|-------------|
-| ⚡ Spark | Every 6 hours | 3 | 20% of yield |
-| 🔄 Pulse | Weekly | 4 | 30% of yield |
-| 🌊 Surge | Monthly | 1 jackpot | ~48% of yield |
+All prizes are drawn together once a month, at an announced time, with the same tickets.
 
-\* A 2% protocol fee is taken first; the remaining 98% is split across the pools. The fee is carved out of the Surge share, so Surge receives ~48% of gross yield rather than a round 50%.
+| Prize | Winners | Share of the prize pool |
+|-------|---------|-------------------------|
+| 🏆 Jackpot | 1 | ~50% |
+| 🎟 Prizes #2–5 | 4 | ~7.5% each |
+| 🎟 Prizes #6–8 | 3 | ~6.7% each |
 
-### Ticket gates
+Yield is split on-chain on deposit: 48% jackpot / 30% prizes #2–5 / 20% prizes #6–8 / 2% protocol fee (1% operations, 1% marketing).
 
-| Draw | Minimum stake |
-|------|--------------|
-| ⚡ Spark | 1 SUI |
-| 🔄 Pulse | 10 SUI |
-| 🌊 Surge | 50 SUI |
+### Tickets
+
+- **Entry:** 1 SUI minimum — every staker is in every prize.
+- **Linear odds:** 1 SUI = 1 ticket. Splitting a stake across wallets never adds tickets.
+- **Time-weighted:** each deposit counts `min(1, days staked before the draw / 30)`. A deposit made 3 days before the draw counts 10%; one staked for the whole cycle counts fully. This stops last-minute deposits from taking a month's odds.
+- **Scaling:** above 2,000 SUI TVL one ticket represents more than 1 SUI (max 2,000 tickets per draw), odds stay linear.
+- **Team wallets are excluded** from every draw.
+
+The ticket logic lives in the crank (`scripts/crank.js` → `planTickets`, `weightStakers`); it reads each staker's live `StakeReceiptV6` objects (with their on-chain deposit timestamps) at draw time.
 
 ---
 
@@ -63,7 +67,7 @@ Three vulnerabilities found during development were fixed before mainnet:
 Surge is **not yet trustless**, and we'd rather be upfront than oversell it:
 
 - **Draws are triggered by a team-operated crank** (holds `AdminCap`). The randomness itself is on-chain and unpredictable, but the operator controls *when* a draw runs.
-- **Ticket counts are currently computed off-chain by the crank** and registered on-chain. The contract does not yet derive ticket counts from on-chain stake, so fair allocation currently depends on the operator running honest code.
+- **Ticket counts are currently computed off-chain by the crank** (from on-chain receipts and deposit times, see Tickets) and registered on-chain. The contract does not yet derive ticket counts itself, so fair allocation currently depends on the operator running the published code. Team wallets are excluded in that code.
 - **Admin capabilities (draw / pool / vault) are held by the team.** A single key currently controls them.
 - **The team holds an UpgradeCap** and can ship contract upgrades. Existing struct layouts and public function signatures are preserved, but upgrades can change function logic. No timelock yet.
 
@@ -104,8 +108,8 @@ On the roadmap to reduce trust: on-chain ticket derivation, permissionless draw 
 │              Fly.io — surge-crank                │
 │  - Harvests haSUI appreciation (yield only)      │
 │  - Routes yield → reward pool (2% fee on-chain)  │
-│  - Registers tickets for stakers                 │
-│  - Triggers draws when due                       │
+│  - Registers time-weighted tickets               │
+│  - Runs the monthly Surge Night (8 prizes)       │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -136,7 +140,9 @@ Upgrade policy: team-held `UpgradeCap`, compatible-style upgrades (logic can cha
 - **Randomness** — `sui::random` (on-chain)
 - **Yield engine** — haSUI (Haedal LST): continuous compounding, O(1) at any TVL, native redemption for exits. See [docs/v6-architecture.md](docs/v6-architecture.md)
 - **Frontend** — React + Vite + @mysten/dapp-kit
-- **Crank** — Node.js on Fly.io
+- **RPC** — Sui GraphQL (`graphql.mainnet.sui.io`); the frontend uses a small CORS proxy (`rpc-proxy/`)
+- **Crank** — Node.js on Fly.io (`@mysten/sui` v2, Node 22)
+- **Telegram bot** — posts Surge Night countdown and results to [@surge_sui](https://t.me/surge_sui)
 - **Hosting** — Vercel (surgeonsui.com)
 
 ---
@@ -174,19 +180,3 @@ node crank.js
 - [ ] Duplicate-winner prevention in draws
 - [ ] Formal third-party security audit
 - [ ] Multi-validator support
-
----
-
-## Built for Sui Overflow 2026
-
-Surge Protocol was built for the Sui Overflow 2026 hackathon.
-
-## Bonus Draw Rules
-
-- **Prize:** 25 SUI, paid by the Surge team to one winner. Normal prize pools continue unchanged.
-- **Eligibility:** wallet with at least 10 SUI staked in Surge continuously from Oct 1, 2026 23:59 UTC to Oct 8, 2026 12:00 UTC.
-- **Tickets:** 1 per whole SUI of the lowest staked balance in that window.
-- **Draw:** tickets ordered by wallet address (ascending). Winning ticket = digest of the first Sui Mainnet checkpoint after Oct 8, 2026 12:00 UTC, read as an integer, modulo total tickets.
-- **Transparency:** eligible wallets and ticket counts are published before the draw; anyone can recompute the result.
-- **Excluded:** team wallets `0x0baa87509dbe704c0932b664bed03b4ac4afe0015fe40a83a6a9d7d2a4fc183b` and `0x2a587fd1789212292af4337cacdc7bcbca496e01a6538f46c08968d41d6a83c0`.
-- No purchase necessary. Principal stays fully withdrawable at any time; withdrawing before the snapshot only removes eligibility.
