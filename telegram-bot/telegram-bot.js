@@ -6,7 +6,7 @@ require('dotenv/config');
 //   • Surge Night countdown: T-7d, T-3d, T-1d, T-3h, T-15min, with live pool
 //   • Results right after the draw: all 8 prizes in ONE message + tx links
 //   • New stakes (≥ NEW_STAKE_MIN_SUI) as social proof
-//   • Daily status at 18:00 Berlin time
+//   • Weekly status, Mondays 18:00 Berlin time (WEEKLY_DAY: 1=Mon)
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +30,7 @@ const RESULTS_WAIT_MS = Number(process.env.RESULTS_WAIT_MS ?? 90_000);
 const POLL_MS            = 60_000;
 const NEW_STAKE_MIN_SUI  = Number(process.env.NEW_STAKE_MIN_SUI ?? 1);
 const DAILY_HOUR_BERLIN  = Number(process.env.DAILY_HOUR_BERLIN ?? 18);
+const WEEKLY_DAY         = Number(process.env.WEEKLY_DAY ?? 1); // 0=Sun … 1=Mon
 const TICKET_CYCLE_MS    = 30 * 86_400_000;
 const MIN_POOL_MIST      = 1_000_000n; // crank skips dust buckets
 
@@ -242,21 +243,22 @@ async function checkNewStakes() {
   }
 }
 
-// ── Daily status ──────────────────────────────────────────────────────────────
+// ── Weekly status ──────────────────────────────────────────────────────────────
 
 let lastDailyDate = '';
 
 async function checkDaily() {
   const nowB = new Date().toLocaleString('en-CA', { timeZone: 'Europe/Berlin', hour12: false });
   const [date, time] = nowB.split(', ');
-  if (Number(time.slice(0, 2)) !== DAILY_HOUR_BERLIN || lastDailyDate === date) return;
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  if (weekday !== WEEKLY_DAY || Number(time.slice(0, 2)) !== DAILY_HOUR_BERLIN || lastDailyDate === date) return;
   lastDailyDate = date;
   const s = await snapshot();
   const days = Math.max(0, Math.ceil((s.at - Date.now()) / 86_400_000));
-  // Countdown posts cover the last 7 days → daily status only outside them, to avoid double posts.
-  if (days <= 7 && days > 0 && [7, 3, 1].includes(days)) return;
+  // Countdown posts cover the last 7 days → weekly status only outside them, to avoid double posts.
+  if (days <= 7 && days > 0) return;
   await sendMessage(
-    `📊 <b>Surge daily</b>\n\n🏦 Staked: <b>${fmt(s.tvl)} SUI</b> (always withdrawable)\n` +
+    `📊 <b>Surge weekly</b>\n\n🏦 Staked: <b>${fmt(s.tvl)} SUI</b> (always withdrawable)\n` +
     `💰 Prize pool: <b>${fmt(s.total)} SUI</b> · 8 winners\n` +
     `📅 Surge Night #${s.drawNo}: ${berlinLabel(s.at)} (${days} day${days === 1 ? '' : 's'})\n` +
     `🔎 <a href="https://suivision.xyz/object/${V6_VAULT}">Verify the vault on-chain</a>\n👉 <a href="${SITE}">surgeonsui.com</a>`,
