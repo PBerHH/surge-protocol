@@ -226,3 +226,6 @@ body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-s
 @media (max-width: 640px) { .sec-badges { grid-template-columns: repeat(2, 1fr); } .main { padding-left: 1rem; padding-right: 1rem; } }
 .main > * { min-width: 0; }
 .ticket-one-sub { font-family: 'DM Mono', monospace; font-size: 10.5px; color: var(--text2); margin-top: 4px; }
+.event-links { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-family: 'DM Mono', monospace; font-size: 12px; }
+.event-links a { color: var(--spark); text-decoration: none; min-height: 24px; display: inline-flex; align-items: center; }
+.event-links a:hover { color: #FFE08A; text-decoration: underline; }
