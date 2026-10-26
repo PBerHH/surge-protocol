@@ -580,6 +580,7 @@ async function harvestStaking(client, keypair, pendingRewards) {
 // - Single entry gate: ≥ 1 SUI (= protocol minimum deposit), every draw.
 const MIN_TICKET_STAKE_MIST = 1_000_000_000n;   // 1 SUI
 const MAX_TICKETS_PER_DRAW  = BigInt(process.env.MAX_TICKETS_PER_DRAW ?? 2000);
+const MIN_ONE_TICKET = (process.env.MIN_ONE_TICKET ?? '1') !== '0'; // ≥1 SUI staked ⇒ ≥1 ticket
 const MAX_REGISTRATIONS_PER_TX = 900;           // PTB limit is 1024 commands
 
 // ── Draw schedule ─────────────────────────────────────────────────────────────
@@ -645,11 +646,17 @@ async function weightStakers(client, candidates, nowMs) {
   for (const addr of candidates) {
     const res = await client.getOwnedObjects({ owner: addr, filter: { StructType: RECEIPT_V6_TYPE } });
     let w = 0n;
+    let raw = 0n;
     for (const o of res.data ?? []) {
       const f = o.data?.content?.fields;
       if (!f?.principal_mist) continue;
+      raw += BigInt(f.principal_mist);
       w += receiptWeightMist(BigInt(f.principal_mist), BigInt(f.deposit_ts_ms ?? 0), nowMs);
     }
+    // Entry guarantee: every wallet staking ≥ 1 SUI holds at least 1 ticket (promise: "1 SUI is
+    // enough"). Time-weighting only adds on top. At TVL > 2,000 SUI the ticket unit exceeds 1 SUI,
+    // so this floor then yields 0 tickets again (no split exploit at scale).
+    if (MIN_ONE_TICKET && raw >= MIN_TICKET_STAKE_MIST && w < MIN_TICKET_STAKE_MIST) w = MIN_TICKET_STAKE_MIST;
     if (w > 0n) out[addr] = w;
   }
   return out;
