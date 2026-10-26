@@ -9,7 +9,7 @@ Surge Protocol is a no-loss prize savings game on Sui. Staked SUI is converted i
 1. Stake SUI through Surge Protocol (minimum 1 SUI)
 2. Your SUI is atomically converted to haSUI (Haedal) inside the vault — earning real staking yield (~2-2.5% APY) continuously, no warmup
 3. The yield (haSUI appreciation) is harvested automatically — the contract enforces on-chain that harvest can never touch principal
-4. Once a month, at **Surge Night**, the yield is drawn among 8 winners — live on X, with reminders and results posted automatically to Telegram
+4. Once a month, at **Surge Night**, the yield is drawn among 8 winners — live on Telegram, where reminders and results are posted automatically
 5. Winners are drawn using `sui::random` — an on-chain random value that can't be predicted in advance
 
 ### Is my principal at risk?
@@ -35,7 +35,7 @@ No. Odds are linear — 100 SUI in one wallet has exactly the same chance as 10 
 No. Tickets depend only on how much you stake and for how long. Points and multipliers are a separate rewards track.
 
 ### Where do I see the draw and the winners?
-Live in an X Space on [@Surge_Sui](https://x.com/Surge_Sui). Reminders before the draw and all winners with their on-chain transaction links are posted automatically to [t.me/surge_sui](https://t.me/surge_sui), so anyone can verify the result.
+Live in our Telegram channel [t.me/surge_sui](https://t.me/surge_sui): reminders before the draw and all winners with their on-chain transaction links are posted there automatically, so anyone can verify the result. Updates also on X [@Surge_Sui](https://x.com/Surge_Sui).
 
 ### Can the team win?
 No. Team wallets are excluded from every draw.
@@ -108,8 +108,8 @@ V6. The contract has been upgraded several times since launch, each time without
 ## Contact & Support
 
 - **Website:** [surgeonsui.com](https://surgeonsui.com)
-- **X (Surge Night live):** [@Surge_Sui](https://x.com/Surge_Sui)
-- **Telegram (draw alerts):** [t.me/surge_sui](https://t.me/surge_sui)
+- **Telegram (Surge Night live, results):** [t.me/surge_sui](https://t.me/surge_sui)
+- **X (updates):** [@Surge_Sui](https://x.com/Surge_Sui)
 - **GitHub:** [github.com/PBerHH/surge-protocol](https://github.com/PBerHH/surge-protocol)
 
 ---
