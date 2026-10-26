@@ -279,6 +279,7 @@ function JackpotEvent({ poolData, drawData, suiPrice }) {
 
         <div className="event-rules">
           <span>1 SUI = 1 ticket</span>
+          <span>Stake early, hold more</span>
           <span>Principal never at risk</span>
           <span>Team wallets excluded</span>
         </div>
@@ -667,9 +668,16 @@ export default function App() {
 
   const sui = parseFloat(stakeAmount) || 0;
   const totalStaked = BigInt(vaultData?.total_principal ?? 0) + BigInt(v6VaultData?.total_principal ?? 0);
-  // Mirrors crank planTickets(): linear odds, 1 ticket per unit, unit = max(1 SUI, ceil((TVL + deposit) / 2000))
+  // Mirrors crank planTickets() + weightStakers(): 1 ticket per unit of stake,
+  // each receipt weighted by min(1, time staked before the draw / 30 days).
+  const TICKET_CYCLE_MS = 30 * 86400000;
+  const eventAtMs = nextEventMs(drawData);
+  const weightAt = (depositMs) => Math.min(1, Math.max(0, eventAtMs - depositMs) / TICKET_CYCLE_MS);
   const ticketUnitSui = Math.max(1, Math.ceil((Number(totalStaked) / 1e9 + sui) / 2000));
-  const drawTickets = sui >= 1 ? Math.floor(sui / ticketUnitSui) : 0;
+  const newStakeWeight = weightAt(Date.now());
+  const drawTickets = sui >= 1 ? Math.floor((sui * newStakeWeight) / ticketUnitSui) : 0;
+  const myWeightedSui = v6Receipts.reduce((acc, r) => acc + (Number(BigInt(r.principal_mist ?? 0)) / 1e9) * weightAt(Number(r.deposit_ts_ms ?? Date.now())), 0);
+  const myTicketsAtDraw = Math.floor(myWeightedSui / ticketUnitSui);
   const sparkTickets = drawTickets;
   const pulseTickets = drawTickets;
   const surgeTickets = drawTickets;
@@ -830,12 +838,14 @@ export default function App() {
               </div>
               <div className="ticket-one">
                 <div>
-                  <div className="ticket-one-k">Your tickets</div>
-                  <div className="ticket-one-v">{drawTickets > 0 ? drawTickets : "—"}</div>
+                  <div className="ticket-one-k">Tickets on draw night</div>
+                  <div className="ticket-one-v">{drawTickets > 0 ? `+${drawTickets}` : "—"}</div>
+                  <div className="ticket-one-sub">{sui >= 1 ? `${Math.round(newStakeWeight * 100)}% of ${Math.floor(sui)} · tickets fill over 30 days` : "min 1 SUI"}</div>
                 </div>
                 <div style={{ textAlign: "right" }}>
                   <div className="ticket-one-k">Jackpot chance</div>
-                  <div className="ticket-one-odds">{drawTickets > 0 ? `≥ ${Math.min(100, (sui / (Number(totalStaked) / 1e9 + sui)) * 100).toFixed(1)}%` : "min 1 SUI"}</div>
+                  <div className="ticket-one-odds">{drawTickets + myTicketsAtDraw > 0 ? `≥ ${Math.min(100, ((drawTickets + myTicketsAtDraw) / Math.max(1, Number(totalStaked) / 1e9 + sui)) * 100).toFixed(1)}%` : "—"}</div>
+                  {account && myTicketsAtDraw > 0 && <div className="ticket-one-sub">you already hold {myTicketsAtDraw}</div>}
                 </div>
               </div>
               {txStatus && <div className={`tx-status ${txStatus.type}`}>{txStatus.msg}</div>}
@@ -865,6 +875,7 @@ export default function App() {
                 <div className="info-row"><span>Prize draw</span><span>Monthly · 8 winners</span></div>
                 <div className="info-row"><span>Draw entry</span><span>1 SUI</span></div>
                 <div className="info-row"><span>Odds</span><span>Linear · 1 SUI = 1 ticket</span></div>
+                <div className="info-row"><span>Tickets</span><span>Fill up over 30 days</span></div>
                 <div className="info-row"><span>Unstake delay</span><span>1–2 epochs (~1–2 days)</span></div>
                 <div className="info-row"><span>Protocol fee</span><span>2% of yield</span></div>
                 <div className="info-row"><span>Randomness</span><span>sui::random (on-chain)</span></div>
@@ -1033,7 +1044,7 @@ export default function App() {
             { q: "Is my principal safe?", a: "Yes. Your deposited SUI is held in the vault. Only the staking yield goes into prize pools — your principal is never at risk." },
             { q: "How does the prize pool get funded?", a: "Your stake is held as haSUI (Haedal liquid staking) and earns continuously. The yield is harvested into the prize pool (2% protocol fee) and paid out once a month to 8 winners: 1 jackpot (~50%), 4 prizes (~7.5% each) and 3 prizes (~6.7% each)." },
             { q: "How are winners selected?", a: "Winners are chosen using sui::random — Sui's native on-chain verifiable randomness. No one can predict or manipulate the outcome. Team wallets are excluded from every draw." },
-            { q: "How often are draws held?", a: "Once a month — Surge Night. All 8 prizes are drawn at the same moment, announced in advance and streamed live on Telegram. Every SUI staked at draw time counts, 1 SUI = 1 ticket." },
+            { q: "How often are draws held?", a: "Once a month — Surge Night. All 8 prizes are drawn at the same moment, announced in advance and streamed live on Telegram. 1 SUI = 1 ticket, and tickets fill up over the 30 days before the draw: SUI staked for the full 30 days counts fully, SUI staked 3 days before counts 10%. Stake early to hold more tickets." },
             { q: "What is the unstake delay?", a: "1-2 epochs (~1-2 days) via Haedal's native redemption. You receive a redemption ticket on unstake; once matured, claim your full principal — exact rate, no fee." },
             { q: "What is the minimum deposit?", a: "1 SUI minimum — that enters you into every draw (Spark, Pulse and Surge). Odds are linear: 1 SUI staked = 1 ticket, so splitting a stake across wallets never improves your chances." },
             { q: "Is the contract audited?", a: "Not yet — Surge is early and unaudited. Open source on GitHub, every number verifiable on-chain, principal coverage enforced by the contract. Formal audit planned before external TVL scales. Stake only what you'd put into an experiment." },

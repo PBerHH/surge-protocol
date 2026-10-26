@@ -47,9 +47,13 @@ async function fields(type) {
   await step('fetchV5Stakers', () => c.fetchV5Stakers(client));
   await step('Haedal tickets (crank)', () => client.getOwnedObjects({ owner: CRANK, filter: { StructType: HAEDAL_TICKET } }));
 
-  console.log('\n── Ticket plan for the next draw (same for Spark / Pulse / Surge)');
+  console.log('\n── Ticket plan for Surge Night (same tickets for all 8 prizes)');
   try {
-    const plan = c.planTickets(await c.fetchV6Stakers(client));
+    const eventMs = BigInt(process.env.DRAW_NOT_BEFORE_MS ?? Date.UTC(2026, 10, 8, 19, 0, 0));
+    const atMs = eventMs > BigInt(Date.now()) ? eventMs : BigInt(Date.now());
+    const weighted = await c.weightStakers(client, Object.keys(await c.fetchV6Stakers(client)), atMs);
+    console.log(`   time-weighted at ${new Date(Number(atMs)).toISOString()} (receipts held now, no new deposits)`);
+    const plan = c.planTickets(weighted);
     console.log(`   1 ticket = ${Number(plan.unit) / 1e9} SUI · ${plan.totalTickets} tickets · excluded: ${plan.excluded.map(a => a.slice(0, 10) + '…').join(', ') || 'none'}`);
     for (const [addr, t] of plan.entries) {
       console.log(`   ${addr.slice(0, 10)}…  ${t} tickets  → ${(Number(t) / Number(plan.totalTickets) * 100).toFixed(1)}% win chance`);

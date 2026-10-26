@@ -76,12 +76,21 @@ function createGqlClient(url = GQL_URL) {
       };
     },
 
+    // All pages; each item carries its Move fields (content.fields) like JSON-RPC showContent.
     async getOwnedObjects({ owner, filter }) {
-      const d = await gql(
-        `query($o:SuiAddress!,$t:String!){ address(address:$o){ objects(first:50, filter:{type:$t}){ nodes{ address } } } }`,
-        { o: owner, t: filter.StructType },
-      );
-      return { data: (d?.address?.objects?.nodes ?? []).map(n => ({ data: { objectId: n.address } })) };
+      const data = [];
+      let after = null;
+      for (let page = 0; page < 20; page++) {
+        const d = await gql(
+          `query($o:SuiAddress!,$t:String!,$a:String){ address(address:$o){ objects(first:50, after:$a, filter:{type:$t}){ pageInfo{ hasNextPage endCursor } nodes{ address contents{ json } } } } }`,
+          { o: owner, t: filter.StructType, a: after },
+        );
+        const objs = d?.address?.objects;
+        for (const n of objs?.nodes ?? []) data.push({ data: { objectId: n.address, content: { dataType: 'moveObject', fields: n.contents?.json } } });
+        if (!objs?.pageInfo?.hasNextPage) break;
+        after = objs.pageInfo.endCursor;
+      }
+      return { data };
     },
 
     // Read-only call; returns JSON-RPC-shaped results[i].returnValues[j] = [bytes[], type]
@@ -611,6 +620,41 @@ function planTickets(stakers) {
   return { unit, entries, totalTickets, excluded };
 }
 
+// ── Time-weighted tickets ─────────────────────────────────────────────────────
+//
+// A receipt only earns its full tickets after it has been staked for a whole
+// cycle: weight = min(1, (drawTime − deposit_ts_ms) / CYCLE). This stops
+// "deposit 2 days before the draw, withdraw after" from getting the same odds as
+// a month of real staking. Source of truth = the LIVE StakeReceiptV6 objects
+// each candidate owns at draw time (unstaking destroys the receipt).
+// Limitation: a receipt transferred to a wallet that never staked itself is not
+// discovered (candidates come from StakedV6 events).
+const TICKET_CYCLE_MS = BigInt(process.env.TICKET_CYCLE_DAYS ?? 30) * 86_400_000n;
+const RECEIPT_V6_TYPE = `${V6_PACKAGE}::stake_vault_v6::StakeReceiptV6`;
+
+function receiptWeightMist(principalMist, depositMs, nowMs) {
+  const held = nowMs > depositMs ? nowMs - depositMs : 0n;
+  if (held >= TICKET_CYCLE_MS) return principalMist;
+  return (principalMist * held) / TICKET_CYCLE_MS;
+}
+
+/// { addr: principalMist } → { addr: time-weighted mist }. Throws if any read fails
+/// (caller then skips the draw rather than drawing with unweighted odds).
+async function weightStakers(client, candidates, nowMs) {
+  const out = {};
+  for (const addr of candidates) {
+    const res = await client.getOwnedObjects({ owner: addr, filter: { StructType: RECEIPT_V6_TYPE } });
+    let w = 0n;
+    for (const o of res.data ?? []) {
+      const f = o.data?.content?.fields;
+      if (!f?.principal_mist) continue;
+      w += receiptWeightMist(BigInt(f.principal_mist), BigInt(f.deposit_ts_ms ?? 0), nowMs);
+    }
+    if (w > 0n) out[addr] = w;
+  }
+  return out;
+}
+
 // ── Draw Registration + Trigger ───────────────────────────────────────────────
 
 async function registerAndDraw(client, keypair, drawType, stakers, balance) {
@@ -809,7 +853,7 @@ async function tick(client, keypair) {
   // Stakers: V6 (net) + V5 (only while V5 still holds principal)
   const v6Stakers = await fetchV6Stakers(client);
   const v5Stakers = sv && sv.totalPrincipal > 0n ? await fetchV5Stakers(client) : {};
-  const stakers = { ...v5Stakers };
+  let stakers = { ...v5Stakers };
   for (const [addr, amt] of Object.entries(v6Stakers)) {
     stakers[addr] = (stakers[addr] ?? 0n) + amt;
   }
@@ -828,6 +872,14 @@ async function tick(client, keypair) {
     return;
   }
 
+  if (checks.some(c => now >= c.next && !PAUSE_DRAWS.has(c.name.toLowerCase()) && c.bal && c.bal >= MIN_POOL_MIST)) {
+    try {
+      stakers = await weightStakers(client, Object.keys(stakers), now);
+    } catch (e) {
+      console.error('  ❌ Could not read receipts for time-weighted tickets — draws postponed:', e.message);
+      return;
+    }
+  }
   for (const c of checks) {
     if (now >= c.next) {
       if (PAUSE_DRAWS.has(c.name.toLowerCase())) {
@@ -874,6 +926,15 @@ async function runCombinedEvent(client, keypair, checks, stakers, now) {
     return;
   }
 
+  let weighted;
+  try {
+    weighted = await weightStakers(client, Object.keys(stakers), now);
+  } catch (e) {
+    console.error('  ❌ Could not read receipts for time-weighted tickets — event postponed to next tick:', e.message);
+    return;
+  }
+  console.log(`  ⚖️  Time-weighted stake: ${Object.entries(weighted).map(([a, w]) => `${a.slice(0, 8)}… ${fmt(w)}`).join(' · ') || 'none'}`);
+  stakers = weighted;
   console.log(`  🎉 Monthly event — drawing 8 prizes from ${fmt(total)} SUI`);
   const ok = await registerAndDraw(client, keypair, surge.type, stakers, surge.bal);
   if (!ok) {
@@ -929,6 +990,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  weightStakers, receiptWeightMist,
   createGqlClient, fetchV6Vault, fetchHaRate, fetchDrawState, fetchPoolBalances,
   fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers, planTickets, tick,
 };
