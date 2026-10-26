@@ -327,6 +327,7 @@ export default function App() {
   const [myWinnings, setMyWinnings] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [stakerCount, setStakerCount] = useState(0);
+  const [pioneerWallets, setPioneerWallets] = useState(0);
   const [openFaq, setOpenFaq] = useState(null);
   const [activeTab, setActiveTab] = useState("stake");
   const [loyaltyData, setLoyaltyData] = useState(null);
@@ -488,6 +489,20 @@ export default function App() {
   }, []);
 
   useEffect(() => { fetchLeaderboard(); }, [fetchLeaderboard]);
+
+  // Pioneer slots are handed out by the points worker in order of first stake (wallets table)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/wallets?select=address`, {
+          method: "HEAD",
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, Prefer: "count=exact" },
+        });
+        const total = Number((r.headers.get("content-range") ?? "").split("/")[1]);
+        if (Number.isFinite(total)) setPioneerWallets(total);
+      } catch (e) { console.error("pioneer count:", e); }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!account?.address || !SUPABASE_ANON_KEY) { setPointsData(null); return; }
@@ -686,7 +701,7 @@ export default function App() {
   const sparkTickets = drawTickets;
   const pulseTickets = drawTickets;
   const surgeTickets = drawTickets;
-  const pioneerTaken = stakerCount;
+  const pioneerTaken = Math.max(pioneerWallets, stakerCount);
   const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
   const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
   const totalPrizes = [poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + Number(BigInt(v ?? 0)), 0);
@@ -747,7 +762,7 @@ export default function App() {
         <div className="hero-eyebrow">Prize-linked staking on Sui</div>
         <h1 className="hero-title">Your principal is safe.<br /><em>Only the yield wins prizes.</em></h1>
 
-        <div style={{ display: "flex", gap: "1px", maxWidth: 520, margin: "2.5rem auto 0", background: "rgba(255,255,255,0.06)", borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
+        <div className="hero-stats" style={{ display: "flex", gap: "1px", maxWidth: 520, margin: "2.5rem auto 0", background: "rgba(255,255,255,0.06)", borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
           <div style={{ flex: 1, padding: "1.5rem 1.75rem", background: "rgba(255,255,255,0.03)", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
             <div style={{ fontSize: "0.7rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", fontWeight: 600 }}>Total Staked</div>
             <div style={{ fontSize: "2rem", fontWeight: 700, color: "#fff", letterSpacing: "-0.02em", lineHeight: 1 }}>{fmtSui(totalStaked)}<span style={{ fontSize: "0.9rem", fontWeight: 400, color: "rgba(255,255,255,0.4)", marginLeft: 6 }}>SUI</span></div>
