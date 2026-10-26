@@ -19,7 +19,7 @@ Think of it like a savings account where instead of earning interest, you get lo
 1. **Stake SUI** — deposit into the Surge vault (minimum 1 SUI), converted atomically into **haSUI** (Haedal liquid staking) — earning from the second it arrives
 2. **Earn tickets** — 1 SUI = 1 ticket. Tickets fill up over the 30 days before a draw, so staking early counts fully
 3. **Yield funds prizes** — haSUI appreciation (~2–2.5% APY staking yield) is harvested and split into prize pools; harvest mathematically cannot touch principal (coverage enforced on-chain)
-4. **Surge Night** — once a month, 8 winners are drawn on-chain, live on X ([@Surge_Sui](https://x.com/Surge_Sui))
+4. **Surge Night** — once a month, 8 winners are drawn on-chain, live in an X Space ([@Surge_Sui](https://x.com/Surge_Sui)); reminders and results with transaction links are posted automatically to Telegram ([t.me/surge_sui](https://t.me/surge_sui))
 5. **Winners are paid** — directly to their wallet, no claiming needed
 
 ### Surge Night — one monthly prize draw
