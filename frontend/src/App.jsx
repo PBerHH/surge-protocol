@@ -747,7 +747,7 @@ export default function App() {
         <div className="hero-eyebrow">Prize-linked staking on Sui</div>
         <h1 className="hero-title">Your principal is safe.<br /><em>Only the yield wins prizes.</em></h1>
 
-        <div style={{ display: "flex", gap: "1px", maxWidth: 520, margin: "2.5rem auto 0", background: "rgba(255,255,255,0.06)", borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
+        <div className="hero-stats" style={{ display: "flex", gap: "1px", maxWidth: 520, margin: "2.5rem auto 0", background: "rgba(255,255,255,0.06)", borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
           <div style={{ flex: 1, padding: "1.5rem 1.75rem", background: "rgba(255,255,255,0.03)", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
             <div style={{ fontSize: "0.7rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", fontWeight: 600 }}>Total Staked</div>
             <div style={{ fontSize: "2rem", fontWeight: 700, color: "#fff", letterSpacing: "-0.02em", lineHeight: 1 }}>{fmtSui(totalStaked)}<span style={{ fontSize: "0.9rem", fontWeight: 400, color: "rgba(255,255,255,0.4)", marginLeft: 6 }}>SUI</span></div>

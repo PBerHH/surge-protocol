@@ -229,3 +229,11 @@ body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-s
 .event-links { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-family: 'DM Mono', monospace; font-size: 12px; }
 .event-links a { color: var(--spark); text-decoration: none; min-height: 24px; display: inline-flex; align-items: center; }
 .event-links a:hover { color: #FFE08A; text-decoration: underline; }
+
+/* hero stat cards: keep Prize Pool fully visible on phones */
+.hero-stats > div { min-width: 0; }
+@media (max-width: 520px) {
+  .hero-stats > div { padding: 1.1rem 0.9rem !important; }
+  .hero-stats > div > div:nth-child(2) { font-size: 1.55rem !important; white-space: nowrap; }
+  .hero-stats > div > div:nth-child(3) { overflow-wrap: anywhere; line-height: 1.35; }
+}
