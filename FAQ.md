@@ -23,10 +23,10 @@ haSUI is Haedal's liquid staking token — the largest and oldest LST on Sui (li
 ## Draws & Prizes
 
 ### How do I enter Surge Night?
-You need at least 1 ticket, i.e. 1 SUI of time-weighted stake (see below). With it you are in all 8 prizes of every Surge Night: 1 jackpot (~50% of the pool), 4 prizes (~7.5% each) and 3 prizes (~6.7% each).
+Stake at least 1 SUI. That enters you into all 8 prizes of every Surge Night: 1 jackpot (~50% of the pool), 4 prizes (~7.5% each) and 3 prizes (~6.7% each).
 
 ### How many tickets do I get?
-1 SUI = 1 ticket, filled up over the 30 days before the draw. For the first Surge Night (Nov 8) a deposit made today counts about 40%, so roughly 3 SUI are needed for a first ticket; 1 SUI staked 30 days before the draw is enough. A deposit staked for the whole 30 days counts fully; one made 3 days before the draw counts 10%. **Stake early, hold more.**
+Every wallet with at least 1 SUI staked holds at least 1 ticket. Beyond that, 1 SUI = 1 ticket, filled up over the 30 days before the draw. A deposit staked for the whole 30 days counts fully; one made 3 days before the draw counts 10%. **Stake early, hold more.**
 
 ### Does splitting my SUI across wallets help?
 No. Odds are linear — 100 SUI in one wallet has exactly the same chance as 10 wallets with 10 SUI.

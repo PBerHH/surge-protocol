@@ -17,7 +17,7 @@ Think of it like a savings account where instead of earning interest, you get lo
 ## How it works
 
 1. **Stake SUI** — deposit into the Surge vault (minimum 1 SUI), converted atomically into **haSUI** (Haedal liquid staking) — earning from the second it arrives
-2. **Earn tickets** — 1 SUI = 1 ticket, filled up over the 30 days before a draw, so staking early counts fully (you need at least 1 full ticket's worth of weighted stake to enter)
+2. **Earn tickets** — Every wallet with at least 1 SUI holds at least 1 ticket; beyond that 1 SUI = 1 ticket, filled up over the 30 days before a draw, so staking early counts fully
 3. **Yield funds prizes** — haSUI appreciation (~2–2.5% APY staking yield) is harvested and split into prize pools; harvest mathematically cannot touch principal (coverage enforced on-chain)
 4. **Surge Night** — once a month, 8 winners are drawn on-chain, live on Telegram ([t.me/surge_sui](https://t.me/surge_sui)): reminders and all winners with transaction links are posted automatically. Updates on X ([@Surge_Sui](https://x.com/Surge_Sui))
 5. **Winners are paid** — directly to their wallet, no claiming needed
@@ -36,9 +36,9 @@ Yield is split on-chain on deposit: 48% jackpot / 30% prizes #2–5 / 20% prizes
 
 ### Tickets
 
-- **Entry:** you need at least 1 ticket, i.e. 1 SUI of *time-weighted* stake. Staked for the full 30 days, 1 SUI is enough; a later deposit counts proportionally less (see below). Every ticket is in every prize.
+- **Entry:** 1 SUI minimum — every staker is in every prize and holds at least 1 ticket.
 - **Linear odds:** 1 SUI = 1 ticket. Splitting a stake across wallets never adds tickets.
-- **Time-weighted:** each deposit counts `min(1, days staked before the draw / 30)`. A deposit made 3 days before the draw counts 10%; one staked for the whole cycle counts fully. Example for the first Surge Night (Nov 8): a deposit made 13 days before counts 43%, so about 3 SUI are needed for a first ticket; 1 SUI only enters if it was staked 30 days before. This stops last-minute deposits from taking a month's odds.
+- **Time-weighted:** each deposit counts `min(1, days staked before the draw / 30)`. A deposit made 3 days before the draw counts 10%; one staked for the whole cycle counts fully. Every wallet with ≥ 1 SUI staked holds at least 1 ticket regardless of timing; the weighting only decides how many *additional* tickets a deposit earns (the 1-ticket floor applies while 1 ticket = 1 SUI, i.e. up to 2,000 SUI TVL). This stops last-minute deposits from taking a month's odds.
 - **Scaling:** above 2,000 SUI TVL one ticket represents more than 1 SUI (max 2,000 tickets per draw), odds stay linear.
 - **Team wallets are excluded** from every draw.
 
