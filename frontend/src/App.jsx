@@ -176,7 +176,7 @@ function SecurityBadges() {
     { icon: "⛓️", label: "Open Source", sub: "GitHub verified" },
   ];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+    <div className="sec-badges">
       {badges.map(b => (
         <div key={b.label} style={{ background: "rgba(58,191,170,0.05)", border: "0.5px solid rgba(58,191,170,0.15)", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
           <div style={{ fontSize: 18, marginBottom: 4 }}>{b.icon}</div>
@@ -188,28 +188,114 @@ function SecurityBadges() {
   );
 }
 
-function LiveDrawTicker({ drawData, poolData }) {
-  const [tick, setTick] = useState(0);
-  useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 1000); return () => clearInterval(t); }, []);
-  const items = [
-    { name: "SPARK", next: drawData?.next_spark_ms, pool: poolData?.spark_pool, color: "#F5C842" },
-    { name: "PULSE", next: drawData?.next_pulse_ms, pool: poolData?.pulse_pool, color: "#3ABFAA" },
-    { name: "SURGE", next: drawData?.next_surge_ms, pool: poolData?.surge_pool, color: "#C67FE8" },
-  ];
+// ── Monthly prize event ──────────────────────────────────────────────────────
+// One draw per month, 8 ranked prizes. On-chain the yield still lands in three
+// buckets (Surge 50% / Pulse 30% / Spark 20%); the crank draws all three at the
+// same moment with the same tickets → #1 = Surge pool, #2–#5 = Pulse / 4,
+// #6–#8 = Spark / 3. Keep in sync with scripts/crank.js DRAW_NOT_BEFORE_MS.
+const FIRST_EVENT_MS = Date.UTC(2026, 10, 8, 19, 0, 0); // Sun 8 Nov 2026 · 20:00 CET
+const TELEGRAM_URL = "https://t.me/surge_sui";
+
+function nextEventMs(drawData) {
+  const onChain = Number(drawData?.next_surge_ms ?? 0);
+  return Math.max(FIRST_EVENT_MS, onChain);
+}
+
+function eventDateLabel(ms) {
+  const d = new Date(ms);
+  const date = d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/Berlin" });
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
+  return `${date} · ${time} CET`;
+}
+
+function prizeLadder(poolData) {
+  const surge = Number(BigInt(poolData?.surge_pool ?? 0));
+  const pulse = Number(BigInt(poolData?.pulse_pool ?? 0));
+  const spark = Number(BigInt(poolData?.spark_pool ?? 0));
+  const total = surge + pulse + spark;
+  const live = (bucket) => bucket >= Number(MIN_POOL_MIST); // crank skips dust buckets
+  const rows = [{ rank: 1, label: "Jackpot", mist: surge, tier: "jackpot", live: live(surge) }];
+  for (let i = 0; i < 4; i++) rows.push({ rank: 2 + i, label: "Prize", mist: pulse / 4, tier: "major", live: live(pulse) });
+  for (let i = 0; i < 3; i++) rows.push({ rank: 6 + i, label: "Prize", mist: spark / 3, tier: "minor", live: live(spark) });
+  return { rows, total };
+}
+
+function EventStrip({ drawData }) {
+  const label = eventDateLabel(nextEventMs(drawData));
   return (
-    <div style={{ background: "var(--bg3)", border: "0.5px solid var(--border)", borderRadius: 10, padding: "8px 14px", display: "flex", gap: 24, alignItems: "center", overflowX: "auto", fontSize: 11, fontFamily: "'DM Mono',monospace" }}>
-      <span style={{ color: "var(--text3)", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>LIVE</span>
-      {items.map(item => {
-        const { label, urgent } = drawStatus(item.next, item.pool);
-        return (
-          <div key={item.name} style={{ display: "flex", gap: 8, alignItems: "center", whiteSpace: "nowrap" }}>
-            <span style={{ color: item.color, fontWeight: 600 }}>{item.name}</span>
-            <span style={{ color: "var(--text2)" }}>{fmtSui(item.pool ?? 0)} SUI</span>
-            <span style={{ color: urgent ? item.color : "var(--text3)" }}>→ {label}</span>
-          </div>
-        );
-      })}
+    <a className="event-strip" href={TELEGRAM_URL} target="_blank" rel="noreferrer">
+      <span className="event-strip-dot" />
+      <span className="event-strip-k">{Number(drawData?.surge_draw_count ?? 0) === 0 ? "First Surge Night" : "Next Surge Night"}</span>
+      <span className="event-strip-v">{label} · live on Telegram</span>
+      <span className="event-strip-arrow">→</span>
+    </a>
+  );
+}
+
+function CountTile({ value, unit }) {
+  return (
+    <div className="ev-tile">
+      <div className="ev-tile-num" key={value}>{String(value).padStart(2, "0")}</div>
+      <div className="ev-tile-unit">{unit}</div>
     </div>
+  );
+}
+
+function JackpotEvent({ poolData, drawData, suiPrice }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  const eventAt = nextEventMs(drawData);
+  const diff = Math.max(0, eventAt - now);
+  const d = Math.floor(diff / 86400000), h = Math.floor((diff % 86400000) / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000), sec = Math.floor((diff % 60000) / 1000);
+  const { rows, total } = prizeLadder(poolData);
+  const drawNo = Number(drawData?.surge_draw_count ?? 0) + 1;
+  const pct = (mist) => (total > 0 ? (mist / total) * 100 : 0);
+
+  return (
+    <section className="event" aria-label="Monthly prize draw">
+      <div className="event-glow" aria-hidden="true" />
+      <div className="event-main">
+        <div className="event-eyebrow">
+          <span>The Surge</span><span className="event-sep">/</span><span>Monthly prize draw</span><span className="event-badge">#{drawNo}</span>
+        </div>
+        <div className="event-pot-label">Total prize pool</div>
+        <div className="event-pot">
+          {(total / 1e9).toFixed(3)}<span className="event-pot-unit">SUI</span>
+        </div>
+        <div className="event-pot-sub">
+          8 winners{suiPrice ? ` · ≈ $${((total / 1e9) * suiPrice).toFixed(2)}` : ""} · grows with every harvest until draw night
+        </div>
+
+        <div className="event-count" role="timer" aria-live="off">
+          {diff > 0 ? <>
+            <CountTile value={d} unit="days" />
+            <CountTile value={h} unit="hrs" />
+            <CountTile value={m} unit="min" />
+            <CountTile value={sec} unit="sec" />
+          </> : <div className="event-live-now">● Drawing now</div>}
+        </div>
+        <div className="event-when">{eventDateLabel(eventAt)} · drawn on-chain with <code>sui::random</code></div>
+
+        <div className="event-rules">
+          <span>1 SUI = 1 ticket</span>
+          <span>Stake early, hold more</span>
+          <span>Principal never at risk</span>
+          <span>Team wallets excluded</span>
+        </div>
+      </div>
+
+      <ol className="ladder" aria-label="Prize ladder">
+        {rows.map((r, i) => (
+          <li key={r.rank} className={`stub stub-${r.tier}${r.live ? "" : " stub-idle"}`} style={{ "--i": i }}>
+            <span className="stub-rank">{r.rank}</span>
+            <span className="stub-label">{r.label}</span>
+            <span className="stub-amt">{r.live ? `${(r.mist / 1e9).toFixed(r.tier === "jackpot" ? 3 : 4)} SUI` : "filling"}</span>
+            <span className="stub-pct">{pct(r.mist).toFixed(1)}%</span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -274,7 +360,7 @@ export default function App() {
         .map(e => ({
           winner: e.parsedJson.winner,
           amount: Number(e.parsedJson.amount_mist) / 1e9,
-          pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw',
+          pool: ['Prize', 'Prize', 'Jackpot'][e.parsedJson.pool] ?? 'Prize',
           ts: e.timestampMs,
         }))
         .sort((a, b) => Number(b.ts) - Number(a.ts));
@@ -369,7 +455,7 @@ export default function App() {
       const all = [...ev1, ...ev2];
       setMyWinnings(all
         .filter(e => e.parsedJson?.winner === account.address)
-        .map(e => ({ amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Spark', 'Pulse', 'Surge'][e.parsedJson.pool] ?? 'Draw', ts: e.timestampMs })));
+        .map(e => ({ amount: Number(e.parsedJson.amount_mist) / 1e9, pool: ['Prize', 'Prize', 'Jackpot'][e.parsedJson.pool] ?? 'Prize', ts: e.timestampMs })));
     } catch (e) { console.error("myWinnings:", e); }
   }, [account]);
 
@@ -575,15 +661,26 @@ export default function App() {
   }
 
   function handleShare() {
-    const text = `🌊 Surge Protocol — Prize-linked staking on Sui!\n\n${fmtSui(vaultData?.total_principal ?? 0)} SUI staked. Your principal is always safe — only the yield wins prizes.\n\n⚡ Spark · 🔄 Pulse · 🌊 Surge draws\n\nhttps://surge-protocol-chi.vercel.app`;
+    const pot = fmtSui([poolData?.spark_pool, poolData?.pulse_pool, poolData?.surge_pool].reduce((acc, v) => acc + BigInt(v ?? 0), 0n));
+    const text = `🌊 Surge Night on Sui — ${pot} SUI prize pool, 8 winners, ${eventDateLabel(nextEventMs(drawData))}.\n\nStake SUI, keep 100% of your principal. Only the yield is raffled. 1 SUI = 1 ticket.\n\nhttps://surgeonsui.com`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
   }
 
   const sui = parseFloat(stakeAmount) || 0;
-  const sparkTickets = sui >= 1 ? 1 : 0;
-  const pulseTickets = sui >= 10 ? Math.floor(Math.sqrt(sui)) : 0;
-  const surgeTickets = sui >= 50 ? Math.floor(Math.sqrt(sui)) : 0;
   const totalStaked = BigInt(vaultData?.total_principal ?? 0) + BigInt(v6VaultData?.total_principal ?? 0);
+  // Mirrors crank planTickets() + weightStakers(): 1 ticket per unit of stake,
+  // each receipt weighted by min(1, time staked before the draw / 30 days).
+  const TICKET_CYCLE_MS = 30 * 86400000;
+  const eventAtMs = nextEventMs(drawData);
+  const weightAt = (depositMs) => Math.min(1, Math.max(0, eventAtMs - depositMs) / TICKET_CYCLE_MS);
+  const ticketUnitSui = Math.max(1, Math.ceil((Number(totalStaked) / 1e9 + sui) / 2000));
+  const newStakeWeight = weightAt(Date.now());
+  const drawTickets = sui >= 1 ? Math.floor((sui * newStakeWeight) / ticketUnitSui) : 0;
+  const myWeightedSui = v6Receipts.reduce((acc, r) => acc + (Number(BigInt(r.principal_mist ?? 0)) / 1e9) * weightAt(Number(r.deposit_ts_ms ?? Date.now())), 0);
+  const myTicketsAtDraw = Math.floor(myWeightedSui / ticketUnitSui);
+  const sparkTickets = drawTickets;
+  const pulseTickets = drawTickets;
+  const surgeTickets = drawTickets;
   const pioneerTaken = stakerCount;
   const pioneerLeft = Math.max(0, 1000 - pioneerTaken);
   const earlyBirdLeft = Math.max(0, 100 - pioneerTaken);
@@ -617,11 +714,6 @@ export default function App() {
     return next ? { days: next.days, mult: next.mult, daysLeft: next.days - d } : null;
   })();
 
-  const draws = [
-    { name: "Spark", emoji: "⚡", color: "#F5C842", colorDim: "rgba(245,200,66,0.1)", freq: "Every 6h · 3 winners", share: "20%", pool: poolData?.spark_pool, next: drawData?.next_spark_ms },
-    { name: "Pulse", emoji: "🔄", color: "#3ABFAA", colorDim: "rgba(58,191,170,0.1)", freq: "Weekly · 4 winners", share: "30%", pool: poolData?.pulse_pool, next: drawData?.next_pulse_ms },
-    { name: "Surge", emoji: "🌊", color: "#C67FE8", colorDim: "rgba(198,127,232,0.1)", freq: "Monthly · 1 jackpot", share: "50%", pool: poolData?.surge_pool, next: drawData?.next_surge_ms },
-  ];
 
   const tabs = [
     { id: "stake", label: "Stake" },
@@ -643,7 +735,7 @@ export default function App() {
       </nav>
 
       <div style={{ padding: "8px 2rem 0" }}>
-        <LiveDrawTicker drawData={drawData} poolData={poolData} />
+        <EventStrip drawData={drawData} />
       </div>
 
       <header className="hero">
@@ -660,7 +752,7 @@ export default function App() {
           <div style={{ flex: 1, padding: "1.5rem 1.75rem", background: "rgba(198,127,232,0.05)", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
             <div style={{ fontSize: "0.7rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(198,127,232,0.6)", fontWeight: 600 }}>Prize Pool</div>
             <div style={{ fontSize: "2rem", fontWeight: 700, color: "#C67FE8", letterSpacing: "-0.02em", lineHeight: 1, textShadow: "0 0 24px rgba(198,127,232,0.4)" }}>{fmtSui(totalPrizes)}<span style={{ fontSize: "0.9rem", fontWeight: 400, color: "rgba(198,127,232,0.5)", marginLeft: 6 }}>SUI</span></div>
-            <div style={{ fontSize: "0.75rem", color: "rgba(198,127,232,0.35)" }}>Spark · Pulse · Surge</div>
+            <div style={{ fontSize: "0.75rem", color: "rgba(198,127,232,0.35)" }}>8 prizes · {eventDateLabel(nextEventMs(drawData))}</div>
           </div>
           {account && myStakeSui > 0 && <>
             <div style={{ width: 1, background: "rgba(255,255,255,0.06)" }} />
@@ -689,21 +781,7 @@ export default function App() {
       <main className="main">
         <SecurityBadges />
 
-        <section className="draws">
-          {draws.map(d => {
-            const { label, urgent } = drawStatus(d.next, d.pool);
-            const diff = d.next && d.next !== '0' ? Number(BigInt(d.next)) - Date.now() : Infinity;
-            const isFomo = d.name === "Spark" && diff > 0 && diff < 3600000;
-            return (
-              <div className={`draw-card${isFomo ? " spark-fomo" : ""}`} key={d.name} style={{ "--accent": d.color, "--accent-dim": d.colorDim }}>
-                <div className="draw-header"><span className="draw-emoji">{d.emoji}</span><span className="draw-name">{d.name}</span><span className="draw-share">{d.share}</span></div>
-                <div className="draw-prize">{fmtSui(d.pool ?? 0)} <span className="draw-sui">SUI</span></div>
-                <div className="draw-freq">{d.freq}</div>
-                <div className={`draw-countdown ${isFomo ? "fomo" : urgent ? "urgent" : ""}`} key={tick}>{label}</div>
-              </div>
-            );
-          })}
-        </section>
+        <JackpotEvent poolData={poolData} drawData={drawData} suiPrice={suiPrice} />
 
         <div style={{ display: "flex", gap: 4, background: "var(--bg3)", borderRadius: 10, padding: 4 }}>
           {tabs.map(tab => (
@@ -758,13 +836,17 @@ export default function App() {
                 <input className="stake-input" type="number" value={stakeAmount} onChange={e => { setStakeAmount(e.target.value); setTxStatus(null); }} placeholder="100" min="1" />
                 <span className="input-denom">SUI</span>
               </div>
-              <div className="tickets">
-                {[{ name: "⚡ Spark", gate: 1, count: sparkTickets, color: "#F5C842" }, { name: "🔄 Pulse", gate: 10, count: pulseTickets, color: "#3ABFAA" }, { name: "🌊 Surge", gate: 50, count: surgeTickets, color: "#C67FE8" }].map(t => (
-                  <div className={`ticket ${t.count > 0 ? "active" : ""}`} key={t.name} style={{ "--tc": t.color }}>
-                    <span className="ticket-name">{t.name}</span>
-                    <span className="ticket-count">{t.count > 0 ? `${t.count} tickets` : `min ${t.gate} SUI`}</span>
-                  </div>
-                ))}
+              <div className="ticket-one">
+                <div>
+                  <div className="ticket-one-k">Tickets on draw night</div>
+                  <div className="ticket-one-v">{drawTickets > 0 ? `+${drawTickets}` : "—"}</div>
+                  <div className="ticket-one-sub">{sui >= 1 ? `${Math.round(newStakeWeight * 100)}% of ${Math.floor(sui)} · tickets fill over 30 days` : "min 1 SUI"}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div className="ticket-one-k">Jackpot chance</div>
+                  <div className="ticket-one-odds">{drawTickets + myTicketsAtDraw > 0 ? `≥ ${Math.min(100, ((drawTickets + myTicketsAtDraw) / Math.max(1, Number(totalStaked) / 1e9 + sui)) * 100).toFixed(1)}%` : "—"}</div>
+                  {account && myTicketsAtDraw > 0 && <div className="ticket-one-sub">you already hold {myTicketsAtDraw}</div>}
+                </div>
               </div>
               {txStatus && <div className={`tx-status ${txStatus.type}`}>{txStatus.msg}</div>}
               <button className="stake-btn" onClick={handleStake} disabled={!account || txStatus?.type === "pending"}>
@@ -790,7 +872,10 @@ export default function App() {
               <p className="loyalty-note">Streak bonus up to +0.3x · Resets on full withdrawal</p>
               <div className="info-rows">
                 <div className="info-row"><span>Min. deposit</span><span>1 SUI</span></div>
-                <div className="info-row"><span>Draw entry</span><span>1 / 10 / 50 SUI</span></div>
+                <div className="info-row"><span>Prize draw</span><span>Monthly · 8 winners</span></div>
+                <div className="info-row"><span>Draw entry</span><span>1 SUI</span></div>
+                <div className="info-row"><span>Odds</span><span>Linear · 1 SUI = 1 ticket</span></div>
+                <div className="info-row"><span>Tickets</span><span>Fill up over 30 days</span></div>
                 <div className="info-row"><span>Unstake delay</span><span>1–2 epochs (~1–2 days)</span></div>
                 <div className="info-row"><span>Protocol fee</span><span>2% of yield</span></div>
                 <div className="info-row"><span>Randomness</span><span>sui::random (on-chain)</span></div>
@@ -876,7 +961,7 @@ export default function App() {
                 <div className="position-row" key={i}>
                   <div>
                     <div className="pos-amount" style={{ fontSize: "0.85rem" }}>
-                      <span style={{ color: w.pool === 'Spark' ? '#F5C842' : w.pool === 'Pulse' ? '#3ABFAA' : '#C67FE8', marginRight: 8 }}>{w.pool === 'Spark' ? '⚡' : w.pool === 'Pulse' ? '🔄' : '🌊'} {w.pool}</span>
+                      <span style={{ color: w.pool === 'Jackpot' ? '#C67FE8' : '#3ABFAA', marginRight: 8 }}>{w.pool === 'Jackpot' ? '🏆' : '🎟'} {w.pool}</span>
                       <span style={{ color: 'rgba(255,255,255,0.4)', fontFamily: 'DM Mono, monospace', fontSize: '0.75rem' }}>{w.winner.slice(0, 6)}...{w.winner.slice(-4)}</span>
                     </div>
                     <div className="pos-status">{new Date(Number(w.ts)).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
@@ -929,7 +1014,7 @@ export default function App() {
                     <div className="position-row" key={i}>
                       <div>
                         <div className="pos-amount" style={{ fontSize: "0.85rem" }}>
-                          <span style={{ color: w.pool === 'Spark' ? '#F5C842' : w.pool === 'Pulse' ? '#3ABFAA' : '#C67FE8', marginRight: 8 }}>{w.pool === 'Spark' ? '⚡' : w.pool === 'Pulse' ? '🔄' : '🌊'} {w.pool}</span>
+                          <span style={{ color: w.pool === 'Jackpot' ? '#C67FE8' : '#3ABFAA', marginRight: 8 }}>{w.pool === 'Jackpot' ? '🏆' : '🎟'} {w.pool}</span>
                         </div>
                         <div className="pos-status">{new Date(Number(w.ts)).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
                       </div>
@@ -957,11 +1042,11 @@ export default function App() {
           <div className="panel-title">FAQ</div>
           {[
             { q: "Is my principal safe?", a: "Yes. Your deposited SUI is held in the vault. Only the staking yield goes into prize pools — your principal is never at risk." },
-            { q: "How does the prize pool get funded?", a: "Your stake is held as haSUI (Haedal liquid staking) and earns continuously. The yield is harvested and split: 20% Spark, 30% Pulse, ~48% Surge, 2% protocol fee." },
-            { q: "How are winners selected?", a: "Winners are chosen using sui::random — Sui's native on-chain verifiable randomness. No one can predict or manipulate the outcome." },
-            { q: "How often are draws held?", a: "Spark every 6h (3 winners), Pulse weekly (4 winners), Surge monthly (1 jackpot). Fully automated." },
+            { q: "How does the prize pool get funded?", a: "Your stake is held as haSUI (Haedal liquid staking) and earns continuously. The yield is harvested into the prize pool (2% protocol fee) and paid out once a month to 8 winners: 1 jackpot (~50%), 4 prizes (~7.5% each) and 3 prizes (~6.7% each)." },
+            { q: "How are winners selected?", a: "Winners are chosen using sui::random — Sui's native on-chain verifiable randomness. No one can predict or manipulate the outcome. Team wallets are excluded from every draw." },
+            { q: "How often are draws held?", a: "Once a month — Surge Night. All 8 prizes are drawn at the same moment, announced in advance and streamed live on Telegram. 1 SUI = 1 ticket, and tickets fill up over the 30 days before the draw: SUI staked for the full 30 days counts fully, SUI staked 3 days before counts 10%. Stake early to hold more tickets." },
             { q: "What is the unstake delay?", a: "1-2 epochs (~1-2 days) via Haedal's native redemption. You receive a redemption ticket on unstake; once matured, claim your full principal — exact rate, no fee." },
-            { q: "What is the minimum deposit?", a: "1 SUI minimum to deposit, which also enters you into Spark draws. Pulse draws need 10 SUI, Surge draws 50 SUI." },
+            { q: "What is the minimum deposit?", a: "1 SUI minimum — that enters you into every draw (Spark, Pulse and Surge). Odds are linear: 1 SUI staked = 1 ticket, so splitting a stake across wallets never improves your chances." },
             { q: "Is the contract audited?", a: "Not yet — Surge is early and unaudited. Open source on GitHub, every number verifiable on-chain, principal coverage enforced by the contract. Formal audit planned before external TVL scales. Stake only what you'd put into an experiment." },
           ].map((item, i) => (
             <div key={i} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", overflow: "hidden" }}>

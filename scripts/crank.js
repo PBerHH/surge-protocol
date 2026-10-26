@@ -76,12 +76,21 @@ function createGqlClient(url = GQL_URL) {
       };
     },
 
+    // All pages; each item carries its Move fields (content.fields) like JSON-RPC showContent.
     async getOwnedObjects({ owner, filter }) {
-      const d = await gql(
-        `query($o:SuiAddress!,$t:String!){ address(address:$o){ objects(first:50, filter:{type:$t}){ nodes{ address } } } }`,
-        { o: owner, t: filter.StructType },
-      );
-      return { data: (d?.address?.objects?.nodes ?? []).map(n => ({ data: { objectId: n.address } })) };
+      const data = [];
+      let after = null;
+      for (let page = 0; page < 20; page++) {
+        const d = await gql(
+          `query($o:SuiAddress!,$t:String!,$a:String){ address(address:$o){ objects(first:50, after:$a, filter:{type:$t}){ pageInfo{ hasNextPage endCursor } nodes{ address contents{ json } } } } }`,
+          { o: owner, t: filter.StructType, a: after },
+        );
+        const objs = d?.address?.objects;
+        for (const n of objs?.nodes ?? []) data.push({ data: { objectId: n.address, content: { dataType: 'moveObject', fields: n.contents?.json } } });
+        if (!objs?.pageInfo?.hasNextPage) break;
+        after = objs.pageInfo.endCursor;
+      }
+      return { data };
     },
 
     // Read-only call; returns JSON-RPC-shaped results[i].returnValues[j] = [bytes[], type]
@@ -558,36 +567,127 @@ async function harvestStaking(client, keypair, pendingRewards) {
   }
 }
 
-// ── Draw Registration + Trigger (unchanged) ───────────────────────────────────
+// ── Ticket model ──────────────────────────────────────────────────────────────
+//
+// Linear odds, identical for all three draws: 1 ticket per TICKET UNIT of stake.
+//   unit    = max(1 SUI, ceil(totalEligibleStake / MAX_TICKETS_PER_DRAW))
+//   tickets = floor(stake / unit)
+// - Linear = sybil-neutral: splitting one wallet into many never adds tickets
+//   (the old √-model gave 10 wallets × 10 SUI 3× the tickets of 1 × 100 SUI).
+// - No "min 1 ticket": that would re-open the split exploit once unit > 1 SUI.
+// - The cap keeps DrawState's vector<address> (32 B per ticket) far below the
+//   on-chain object size limit and the per-tx gas budget as TVL grows.
+// - Single entry gate: ≥ 1 SUI (= protocol minimum deposit), every draw.
+const MIN_TICKET_STAKE_MIST = 1_000_000_000n;   // 1 SUI
+const MAX_TICKETS_PER_DRAW  = BigInt(process.env.MAX_TICKETS_PER_DRAW ?? 2000);
+const MAX_REGISTRATIONS_PER_TX = 900;           // PTB limit is 1024 commands
+
+// ── Draw schedule ─────────────────────────────────────────────────────────────
+// DRAW_MODE=combined (default): ONE monthly prize event. Spark + Pulse + Surge
+// are drawn together, with the same ticket list, as soon as Surge is due
+// on-chain (30-day cadence) AND DRAW_NOT_BEFORE_MS has passed → 8 ranked prizes
+// (1 jackpot = Surge pool, 4 = Pulse pool / 4, 3 = Spark pool / 3).
+// Surge is drawn FIRST; Pulse/Spark only follow if Surge succeeded — otherwise
+// Spark/Pulse (6h / weekly on-chain cadence) would fire every tick on their own.
+// DRAW_MODE=separate restores the old independent 6h / weekly / monthly draws.
+const DRAW_MODE = (process.env.DRAW_MODE ?? 'combined').toLowerCase();
+const DRAW_NOT_BEFORE_MS = BigInt(process.env.DRAW_NOT_BEFORE_MS ?? Date.UTC(2026, 10, 8, 19, 0, 0)); // Sun 8 Nov 2026, 20:00 CET
+
+// Hold specific draws (e.g. for an announced live event): PAUSE_DRAWS="surge"
+// or "spark,pulse,surge". Pools keep accumulating; remove the var to resume.
+const PAUSE_DRAWS = new Set(
+  (process.env.PAUSE_DRAWS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+);
+
+// Wallets never entered into draws (team / treasury). Default: admin wallet.
+// Set DRAW_EXCLUDE="" to exclude nobody, or a comma list to override.
+const ADMIN_WALLET = '0x0baa87509dbe704c0932b664bed03b4ac4afe0015fe40a83a6a9d7d2a4fc183b';
+const DRAW_EXCLUDE = new Set(
+  (process.env.DRAW_EXCLUDE ?? ADMIN_WALLET).split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+);
+
+function planTickets(stakers) {
+  const eligible = Object.entries(stakers)
+    .filter(([addr, mist]) => !DRAW_EXCLUDE.has(addr.toLowerCase()) && BigInt(mist) >= MIN_TICKET_STAKE_MIST);
+  const total = eligible.reduce((a, [, m]) => a + BigInt(m), 0n);
+  const capUnit = (total + MAX_TICKETS_PER_DRAW - 1n) / MAX_TICKETS_PER_DRAW;
+  const unit = capUnit > MIN_TICKET_STAKE_MIST ? capUnit : MIN_TICKET_STAKE_MIST;
+  const entries = eligible
+    .map(([addr, m]) => [addr, BigInt(m) / unit])
+    .filter(([, t]) => t > 0n);
+  const totalTickets = entries.reduce((a, [, t]) => a + t, 0n);
+  const excluded = Object.keys(stakers).filter(a => DRAW_EXCLUDE.has(a.toLowerCase()));
+  return { unit, entries, totalTickets, excluded };
+}
+
+// ── Time-weighted tickets ─────────────────────────────────────────────────────
+//
+// A receipt only earns its full tickets after it has been staked for a whole
+// cycle: weight = min(1, (drawTime − deposit_ts_ms) / CYCLE). This stops
+// "deposit 2 days before the draw, withdraw after" from getting the same odds as
+// a month of real staking. Source of truth = the LIVE StakeReceiptV6 objects
+// each candidate owns at draw time (unstaking destroys the receipt).
+// Limitation: a receipt transferred to a wallet that never staked itself is not
+// discovered (candidates come from StakedV6 events).
+const TICKET_CYCLE_MS = BigInt(process.env.TICKET_CYCLE_DAYS ?? 30) * 86_400_000n;
+const RECEIPT_V6_TYPE = `${V6_PACKAGE}::stake_vault_v6::StakeReceiptV6`;
+
+function receiptWeightMist(principalMist, depositMs, nowMs) {
+  const held = nowMs > depositMs ? nowMs - depositMs : 0n;
+  if (held >= TICKET_CYCLE_MS) return principalMist;
+  return (principalMist * held) / TICKET_CYCLE_MS;
+}
+
+/// { addr: principalMist } → { addr: time-weighted mist }. Throws if any read fails
+/// (caller then skips the draw rather than drawing with unweighted odds).
+async function weightStakers(client, candidates, nowMs) {
+  const out = {};
+  for (const addr of candidates) {
+    const res = await client.getOwnedObjects({ owner: addr, filter: { StructType: RECEIPT_V6_TYPE } });
+    let w = 0n;
+    for (const o of res.data ?? []) {
+      const f = o.data?.content?.fields;
+      if (!f?.principal_mist) continue;
+      w += receiptWeightMist(BigInt(f.principal_mist), BigInt(f.deposit_ts_ms ?? 0), nowMs);
+    }
+    if (w > 0n) out[addr] = w;
+  }
+  return out;
+}
+
+// ── Draw Registration + Trigger ───────────────────────────────────────────────
 
 async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   const names = ['Spark', 'Pulse', 'Surge'];
   const registerFn = ['register_spark_tickets', 'register_pulse_tickets', 'register_surge_tickets'];
   const triggerFn  = ['trigger_spark',          'trigger_pulse',          'trigger_surge'];
-  const gates = [1, 10, 50];
   const name = names[drawType];
 
   if (Object.keys(stakers).length === 0) {
     console.log(`  ⚠️ ${name}: no stakers found — skipping draw`);
-    return;
+    return false;
   }
-  console.log(`  🎲 ${name} draw — registering tickets & triggering...`);
 
+  const plan = planTickets(stakers);
+  if (plan.excluded.length > 0) {
+    console.log(`  🚫 ${name}: ${plan.excluded.length} excluded wallet(s) (DRAW_EXCLUDE): ${plan.excluded.map(a => a.slice(0, 10) + '…').join(', ')}`);
+  }
+  if (plan.entries.length > MAX_REGISTRATIONS_PER_TX) {
+    console.error(`  ❌ ${name}: ${plan.entries.length} participants exceed ${MAX_REGISTRATIONS_PER_TX}/tx — batching not implemented yet, skipping draw`);
+    return false;
+  }
+  console.log(`  🎲 ${name} draw — ${plan.entries.length} participants · ${plan.totalTickets} tickets · 1 ticket = ${fmt(plan.unit)} SUI`);
+
+  let drawn = false;
   try {
     const tx = new Transaction();
     tx.setGasPrice(1000);
 
     let registered = 0;
-    for (const [addr, amtMist] of Object.entries(stakers)) {
-      const suiAmt = Number(amtMist) / 1e9;
-      let tickets;
-      if (drawType === 0) {
-        tickets = suiAmt >= 1 ? 1 : 0;
-      } else if (drawType === 1) {
-        tickets = suiAmt < 10 ? 0 : Math.max(1, Math.floor(Math.sqrt(suiAmt)));
-      } else {
-        tickets = suiAmt < 50 ? 0 : Math.max(1, Math.floor(Math.sqrt(suiAmt)));
-      }
+    for (const [addr, ticketsBig] of plan.entries) {
+      const tickets = Number(ticketsBig);
+      const pct = Number((ticketsBig * 10000n) / plan.totalTickets) / 100;
+      console.log(`     ${addr.slice(0, 10)}… ${tickets} tickets (${pct}%)`);
       if (tickets > 0) {
         registered++;
         tx.moveCall({
@@ -603,8 +703,8 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
     }
 
     if (registered === 0) {
-      console.log(`  ⚠️ ${name}: no eligible participants (need ≥${gates[drawType]} SUI staked) — skipping draw, no gas spent`);
-      return;
+      console.log(`  ⚠️ ${name}: no eligible participants (need ≥1 SUI staked, not excluded) — skipping draw, no gas spent`);
+      return false;
     }
 
     tx.moveCall({
@@ -625,6 +725,7 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
     });
     if (r.effects?.status?.status === 'success') {
       console.log(`  ✅ ${name} draw complete — tx: ${r.digest}`);
+      drawn = true;
       for (const ev of r.events ?? []) {
         if (ev.type?.includes('PrizeAwarded')) {
           const f = ev.parsedJson;
@@ -637,6 +738,7 @@ async function registerAndDraw(client, keypair, drawType, stakers, balance) {
   } catch (e) {
     console.error(`  ❌ ${name} draw error:`, e.message);
   }
+  return drawn;
 }
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
@@ -751,7 +853,7 @@ async function tick(client, keypair) {
   // Stakers: V6 (net) + V5 (only while V5 still holds principal)
   const v6Stakers = await fetchV6Stakers(client);
   const v5Stakers = sv && sv.totalPrincipal > 0n ? await fetchV5Stakers(client) : {};
-  const stakers = { ...v5Stakers };
+  let stakers = { ...v5Stakers };
   for (const [addr, amt] of Object.entries(v6Stakers)) {
     stakers[addr] = (stakers[addr] ?? 0n) + amt;
   }
@@ -764,9 +866,25 @@ async function tick(client, keypair) {
     { type: 1, name: 'Pulse', icon: '🔄', next: drawTimes.nextPulseMs, bal: balances?.pulse },
     { type: 2, name: 'Surge', icon: '🌊', next: drawTimes.nextSurgeMs, bal: balances?.surge },
   ];
+
+  if (DRAW_MODE !== 'separate') {
+    await runCombinedEvent(client, keypair, checks, stakers, now);
+    return;
+  }
+
+  if (checks.some(c => now >= c.next && !PAUSE_DRAWS.has(c.name.toLowerCase()) && c.bal && c.bal >= MIN_POOL_MIST)) {
+    try {
+      stakers = await weightStakers(client, Object.keys(stakers), now);
+    } catch (e) {
+      console.error('  ❌ Could not read receipts for time-weighted tickets — draws postponed:', e.message);
+      return;
+    }
+  }
   for (const c of checks) {
     if (now >= c.next) {
-      if (c.bal && c.bal >= MIN_POOL_MIST) {
+      if (PAUSE_DRAWS.has(c.name.toLowerCase())) {
+        console.log(`  ${c.icon} ${c.name}: due — PAUSED via PAUSE_DRAWS, pool ${fmt(c.bal ?? 0n)} SUI held for next run`);
+      } else if (c.bal && c.bal >= MIN_POOL_MIST) {
         await registerAndDraw(client, keypair, c.type, stakers, c.bal);
         await new Promise(r => setTimeout(r, 3000));
       } else {
@@ -777,6 +895,66 @@ async function tick(client, keypair) {
       console.log(`  ${c.icon} ${c.name}: next in ${formatCountdown(sec)}`);
     }
   }
+}
+
+// ── Combined monthly event ────────────────────────────────────────────────────
+
+let scheduledEventAt = 0n;
+
+async function runCombinedEvent(client, keypair, checks, stakers, now) {
+  const [spark, pulse, surge] = checks;
+  const eventAt = surge.next > DRAW_NOT_BEFORE_MS ? surge.next : DRAW_NOT_BEFORE_MS;
+  const total = (spark.bal ?? 0n) + (pulse.bal ?? 0n) + (surge.bal ?? 0n);
+
+  if (now < eventAt) {
+    console.log(`  🌊 Monthly event: ${fmt(total)} SUI · 8 prizes · in ${formatCountdown(Number(eventAt - now) / 1000)} (${new Date(Number(eventAt)).toISOString()})`);
+    // Hit the announced time exactly instead of up to 6h late.
+    const wait = eventAt - now;
+    if (wait <= BigInt(POLL_MS) && scheduledEventAt !== eventAt) {
+      scheduledEventAt = eventAt;
+      console.log(`  ⏱️  Event timer set for ${new Date(Number(eventAt)).toISOString()}`);
+      setTimeout(() => safeTick(client, keypair), Number(wait) + 5_000);
+    }
+    return;
+  }
+  if (PAUSE_DRAWS.has('surge') || PAUSE_DRAWS.has('event')) {
+    console.log(`  🌊 Monthly event due — PAUSED via PAUSE_DRAWS · pool ${fmt(total)} SUI held`);
+    return;
+  }
+  if (!surge.bal || surge.bal < MIN_POOL_MIST) {
+    console.log(`  🌊 Monthly event due but jackpot below ${fmt(MIN_POOL_MIST)} SUI — skipping`);
+    return;
+  }
+
+  let weighted;
+  try {
+    weighted = await weightStakers(client, Object.keys(stakers), now);
+  } catch (e) {
+    console.error('  ❌ Could not read receipts for time-weighted tickets — event postponed to next tick:', e.message);
+    return;
+  }
+  console.log(`  ⚖️  Time-weighted stake: ${Object.entries(weighted).map(([a, w]) => `${a.slice(0, 8)}… ${fmt(w)}`).join(' · ') || 'none'}`);
+  stakers = weighted;
+  console.log(`  🎉 Monthly event — drawing 8 prizes from ${fmt(total)} SUI`);
+  const ok = await registerAndDraw(client, keypair, surge.type, stakers, surge.bal);
+  if (!ok) {
+    console.log('  ⚠️ Jackpot draw did not complete — Pulse/Spark held for the next attempt');
+    return;
+  }
+  for (const c of [pulse, spark]) {
+    await new Promise(r => setTimeout(r, 3000));
+    if (now < c.next) { console.log(`  ${c.icon} ${c.name}: not due on-chain yet — skipped in this event`); continue; }
+    if (!c.bal || c.bal < MIN_POOL_MIST) { console.log(`  ${c.icon} ${c.name}: pool below ${fmt(MIN_POOL_MIST)} SUI — skipped in this event`); continue; }
+    await registerAndDraw(client, keypair, c.type, stakers, c.bal);
+  }
+}
+
+// One tick at a time — the event timer and the 6h interval can overlap.
+let ticking = false;
+async function safeTick(client, keypair) {
+  if (ticking) { console.log('  ⏭️ tick already running — skipped'); return; }
+  ticking = true;
+  try { await tick(client, keypair); } catch (e) { console.error(e); } finally { ticking = false; }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -802,8 +980,9 @@ async function main() {
   const keypair = loadKeypair();
   console.log(`   Address:    ${keypair.getPublicKey().toSuiAddress()}\n`);
 
-  await tick(client, keypair);
-  setInterval(() => tick(client, keypair).catch(console.error), POLL_MS);
+  console.log(`   Draw mode:  ${DRAW_MODE}${DRAW_MODE !== 'separate' ? ` · not before ${new Date(Number(DRAW_NOT_BEFORE_MS)).toISOString()}` : ''}`);
+  await safeTick(client, keypair);
+  setInterval(() => safeTick(client, keypair), POLL_MS);
 }
 
 if (require.main === module) {
@@ -811,6 +990,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  weightStakers, receiptWeightMist,
   createGqlClient, fetchV6Vault, fetchHaRate, fetchDrawState, fetchPoolBalances,
-  fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers,
+  fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers, planTickets, tick,
 };
