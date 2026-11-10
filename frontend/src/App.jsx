@@ -697,13 +697,10 @@ export default function App() {
   const newStakeWeight = weightAt(Date.now());
   const myWeightedSui = v6Receipts.reduce((acc, r) => acc + (Number(BigInt(r.principal_mist ?? 0)) / 1e9) * weightAt(Number(r.deposit_ts_ms ?? Date.now())), 0);
   const myRawSui = v6Receipts.reduce((acc, r) => acc + Number(BigInt(r.principal_mist ?? 0)) / 1e9, 0);
-  // Entry guarantee (mirrors crank): ≥ 1 SUI staked ⇒ at least 1 ticket while the unit is 1 SUI.
-  const ticketsFor = (weighted, raw) => {
-    const t = Math.floor(weighted / ticketUnitSui);
-    return ticketUnitSui === 1 && raw >= 1 ? Math.max(1, t) : t;
-  };
-  const myTicketsAtDraw = ticketsFor(myWeightedSui, myRawSui);
-  const drawTickets = sui >= 1 ? Math.max(0, ticketsFor(myWeightedSui + sui * newStakeWeight, myRawSui + sui) - myTicketsAtDraw) : 0;
+  // Tickets are time-weighted (mirrors crank): no free minimum ticket per wallet.
+  const ticketsFor = (weighted) => Math.floor(weighted / ticketUnitSui);
+  const myTicketsAtDraw = ticketsFor(myWeightedSui);
+  const drawTickets = sui >= 1 ? Math.max(0, ticketsFor(myWeightedSui + sui * newStakeWeight) - myTicketsAtDraw) : 0;
   const sparkTickets = drawTickets;
   const pulseTickets = drawTickets;
   const surgeTickets = drawTickets;
@@ -1072,7 +1069,7 @@ export default function App() {
             { q: "How are winners selected?", a: "Winners are chosen using sui::random — Sui's native on-chain verifiable randomness. No one can predict or manipulate the outcome. Team wallets are excluded from every draw." },
             { q: "How often are draws held?", a: "Once a month — Surge Night. All 8 prizes are drawn at the same moment, announced in advance and drawn automatically on-chain. Reminders before the draw and all 8 winners with their on-chain transaction links are posted live to our Telegram channel t.me/surge_sui, so anyone can verify the result. Updates also on X @Surge_Sui. Every wallet staking at least 1 SUI holds at least 1 ticket. Beyond that 1 SUI = 1 ticket, filled up over the 30 days before the draw: SUI staked for the full 30 days counts fully, SUI staked 3 days before counts 10%. Stake early to hold more tickets." },
             { q: "What is the unstake delay?", a: "1-2 epochs (~1-2 days) via Haedal's native redemption. You receive a redemption ticket on unstake; once matured, claim your full principal — exact rate, no fee." },
-            { q: "What is the minimum deposit?", a: "1 SUI minimum — that enters you into every draw (Spark, Pulse and Surge). Odds are linear: 1 SUI staked = 1 ticket, so splitting a stake across wallets never improves your chances." },
+            { q: "What is the minimum deposit?", a: "1 SUI minimum to take part. Odds are linear and time-weighted: 1 SUI staked for the full 30 days before the draw = 1 ticket, a deposit made later counts proportionally less. Splitting a stake across wallets never improves your chances." },
             { q: "Is the contract audited?", a: "Not yet — Surge is early and unaudited. Open source on GitHub, every number verifiable on-chain, principal coverage enforced by the contract. Formal audit planned before external TVL scales. Stake only what you'd put into an experiment." },
           ].map((item, i) => (
             <div key={i} style={{ borderBottom: "0.5px solid rgba(255,255,255,0.06)", overflow: "hidden" }}>

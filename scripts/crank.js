@@ -580,7 +580,9 @@ async function harvestStaking(client, keypair, pendingRewards) {
 // - Single entry gate: ≥ 1 SUI (= protocol minimum deposit), every draw.
 const MIN_TICKET_STAKE_MIST = 1_000_000_000n;   // 1 SUI
 const MAX_TICKETS_PER_DRAW  = BigInt(process.env.MAX_TICKETS_PER_DRAW ?? 2000);
-const MIN_ONE_TICKET = (process.env.MIN_ONE_TICKET ?? '1') !== '0'; // ≥1 SUI staked ⇒ ≥1 ticket
+// Off by default (sybil protection, review finding H-01): a free ticket per wallet lets many fresh
+// 1-SUI wallets bypass the 30-day time-weighting. Set MIN_ONE_TICKET=1 only to re-enable.
+const MIN_ONE_TICKET = (process.env.MIN_ONE_TICKET ?? '0') === '1';
 const MAX_REGISTRATIONS_PER_TX = 900;           // PTB limit is 1024 commands
 
 // ── Draw schedule ─────────────────────────────────────────────────────────────
