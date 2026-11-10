@@ -364,17 +364,19 @@ async function fetchHaRate(client, sender) {
 /// enumeration silently caps at the query limit — stakers beyond it would get
 /// NO tickets despite having stake. Hard cap of 40 pages (2000 events) with a
 /// loud warning so a pathological event flood can't spin the tick forever.
+/// (Review finding M-02: the old 40-page / 2,000-event cap silently dropped later stakers.)
+const MAX_EVENT_PAGES = Number(process.env.MAX_EVENT_PAGES ?? 1000); // 1000 pages = 50,000 events
 async function queryAllEvents(client, type) {
   const all = [];
   let cursor = null;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < MAX_EVENT_PAGES; i++) {
     const res = await client.queryEvents({ query: { MoveEventType: type }, limit: 50, cursor });
     all.push(...res.data);
     if (!res.hasNextPage) return all;
     cursor = res.nextCursor;
   }
-  console.error(`  ⚠️ queryAllEvents(${type.split('::').pop()}): >2000 events — enumeration truncated, RAISE PAGE CAP`);
-  return all;
+  // Fail loudly instead of drawing with a truncated participant list.
+  throw new Error(`queryAllEvents(${type.split('::').pop()}): >${MAX_EVENT_PAGES * 50} events — raise MAX_EVENT_PAGES`);
 }
 
 async function fetchV6Stakers(client) {
@@ -615,9 +617,17 @@ function planTickets(stakers) {
   const total = eligible.reduce((a, [, m]) => a + BigInt(m), 0n);
   const capUnit = (total + MAX_TICKETS_PER_DRAW - 1n) / MAX_TICKETS_PER_DRAW;
   const unit = capUnit > MIN_TICKET_STAKE_MIST ? capUnit : MIN_TICKET_STAKE_MIST;
-  const entries = eligible
-    .map(([addr, m]) => [addr, BigInt(m) / unit])
-    .filter(([, t]) => t > 0n);
+  // Largest-remainder allocation (review finding M-05): plain floor() gave every wallet below one
+  // ticket unit zero tickets once the unit grew past 1 SUI. Whole tickets first, then the leftover
+  // tickets (up to total/unit) go to the largest fractional remainders.
+  const base = eligible.map(([addr, m]) => ({ addr, t: BigInt(m) / unit, rem: BigInt(m) % unit }));
+  const target = total / unit;
+  let leftover = target - base.reduce((a, b) => a + b.t, 0n);
+  for (const b of [...base].sort((x, y) => (y.rem > x.rem ? 1 : y.rem < x.rem ? -1 : 0))) {
+    if (leftover <= 0n) break;
+    if (b.rem > 0n) { b.t += 1n; leftover -= 1n; }
+  }
+  const entries = base.map(b => [b.addr, b.t]).filter(([, t]) => t > 0n);
   const totalTickets = entries.reduce((a, [, t]) => a + t, 0n);
   const excluded = Object.keys(stakers).filter(a => DRAW_EXCLUDE.has(a.toLowerCase()));
   return { unit, entries, totalTickets, excluded };
@@ -645,6 +655,7 @@ function receiptWeightMist(principalMist, depositMs, nowMs) {
 /// (caller then skips the draw rather than drawing with unweighted odds).
 async function weightStakers(client, candidates, nowMs) {
   const out = {};
+  const seenReceipts = new Set(); // M-03: a receipt moved between wallets during the read must count once
   for (const addr of candidates) {
     const res = await client.getOwnedObjects({ owner: addr, filter: { StructType: RECEIPT_V6_TYPE } });
     let w = 0n;
@@ -652,6 +663,13 @@ async function weightStakers(client, candidates, nowMs) {
     for (const o of res.data ?? []) {
       const f = o.data?.content?.fields;
       if (!f?.principal_mist) continue;
+      const id = o.data?.objectId;
+      if (id) {
+        if (seenReceipts.has(id)) continue;
+        seenReceipts.add(id);
+      }
+      // Only credit a receipt to the wallet recorded as its owner.
+      if (f.owner && String(f.owner).toLowerCase() !== String(addr).toLowerCase()) continue;
       raw += BigInt(f.principal_mist);
       w += receiptWeightMist(BigInt(f.principal_mist), BigInt(f.deposit_ts_ms ?? 0), nowMs);
     }
@@ -999,6 +1017,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  queryAllEvents,
   weightStakers, receiptWeightMist,
   createGqlClient, fetchV6Vault, fetchHaRate, fetchDrawState, fetchPoolBalances,
   fetchStakingVault, fetchEpoch, fetchV6Stakers, fetchV5Stakers, planTickets, tick,
